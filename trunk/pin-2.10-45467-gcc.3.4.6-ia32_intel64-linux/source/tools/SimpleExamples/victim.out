@@ -1,0 +1,30 @@
+PIN:MEMLATENCIES 1.0. 0x0
+#
+# DCACHE stats
+#
+##victim buffer:
+##Entries:            4
+##BufferR-Hits:            150802:   33.24%
+##BufferW-Hits:            113797:   25.08%
+
+##BufferR-Misses:          166956:   36.80%
+##BufferW-Misses:           22092:    4.87%
+
+##Buffer-Writeback:             22088:    4.87%
+=======================================
+
+
+##L1 Data Cache:
+##Load-Hits:               183417:   97.02%
+##Load-Misses:               5631:    2.98%
+##Load-Accesses:           189048:  100.00%
+##
+##Store-Hits:               22084:   99.98%
+##Store-Misses:                 4:    0.02%
+##Store-Accesses:           22088:  100.00%
+##
+##Total-Hits:              205501:   97.33%
+##Total-Misses:              5635:    2.67%
+##Total-Accesses:          211136:  100.00%
+
+##Total-Writeback:                 0:    0.00%
