@@ -50,7 +50,8 @@ using namespace std;
 
 
 
-
+extern ADDRINT g_CurrentCycle;
+const UINT32 g_memoryLatency =200;
 
 /*!
  *  @brief Cache tag - self clearing on creation
@@ -103,7 +104,10 @@ class LRU_CACHE_SET
     UINT32 _nextReplaceIndex;
 
     bool _bDirty[MAX_ASSOCIATIVITY];
-  bool _bValid[MAX_ASSOCIATIVITY];  // to do: no need for one-level cache
+	bool _bValid[MAX_ASSOCIATIVITY];  // to do: no need for one-level cache
+	
+	UINT32 _readPenalty;
+	UINT32 _writePenalty;
 
   public:
   std::list<UINT32> _tagsLRU;         // LRU list
@@ -112,9 +116,14 @@ class LRU_CACHE_SET
       : _tagsLastIndex(associativity - 1)
     {
         ASSERTX(associativity <= MAX_ASSOCIATIVITY);
-        _nextReplaceIndex = _tagsLastIndex;
-        
+        _nextReplaceIndex = _tagsLastIndex;        
     }
+	
+	VOID SetPenalty(UINT32 rPenalty, UINT32 wPenalty)
+	{
+		_readPenalty = rPenalty;
+		_writePenalty = wPenalty;
+	}
 
     VOID SetAssociativity(UINT32 associativity)
     {
@@ -153,6 +162,7 @@ class LRU_CACHE_SET
 
   void HitLRU(UINT32 lineIndex, bool bWrite)
   {
+	  g_CurrentCycle += bWrite? _writePenalty: _readPenalty;
         if( _tagsLRU.back() == lineIndex )
             return;
 
@@ -170,6 +180,8 @@ class LRU_CACHE_SET
   void Replace(CACHE_TAG tag, bool bWrite )
   {
       UINT32 lineIndex = _tagsLRU.front();
+	  
+	  g_CurrentCycle += bWrite? _writePenalty: _readPenalty;
 
       _tags[lineIndex] = tag;
       _tagsLRU.pop_front();
@@ -194,6 +206,11 @@ class LRU_CACHE_SET
   UINT32 GetSpot()
   {
       return _tagsLRU.back();
+  }
+  
+  VOID Fini()
+  {
+	  
   }
 };
 
@@ -226,6 +243,7 @@ class CACHE_BASE
     {
         CACHE_TYPE_ICACHE,
         CACHE_TYPE_DCACHE,
+		CACHE_TYPE_L2,
         CACHE_TYPE_NUM
     } CACHE_TYPE;
 
@@ -233,7 +251,10 @@ class CACHE_BASE
     static const UINT32 HIT_MISS_NUM = 2;
     CACHE_STATS _access[ACCESS_BASE::ACCESS_TYPE_NUM][HIT_MISS_NUM];
     CACHE_STATS _writeback;
-    const std::string _name;
+    const std::string _name;	
+	
+	UINT32 _readPenalty,
+	UINT32 _writePenalty;
 
   private:    // input params
 
@@ -292,7 +313,7 @@ protected:
         SplitAddress(addr, tag, setIndex);
     }
 
-  virtual bool AccessSingleLine(ADDRINT addr, ACCESS_BASE::ACCESS_TYPE accessType) { cout << "AccessSingleLine in Base1\n"; return true;};
+  virtual unsigned int AccessSingleLine(ADDRINT addr, ACCESS_BASE::ACCESS_TYPE accessType) { cout << "AccessSingleLine in Base1\n"; return true;};
 
     virtual string StatsLong(string prefix = "", CACHE_TYPE = CACHE_TYPE_DCACHE) const { return "StatsLong in Base1";};
 };
@@ -349,16 +370,19 @@ class CACHE1 : public CACHE_BASE
         for (UINT32 i = 0; i < NumSets(); i++)
         {
             _sets[i].SetAssociativity(associativity);
+			_sets[i].SetPenalty(_readPenalty, _writePenalty);
         }
     }
 
     // modifiers
+	VOID SetLatency(UINT32 rLatency, UINT32 wLatency ) { _readPenalty = rLatency, _writePenalty = wLatency; }
   VOID SetNextLevel(CACHE_BASE *pCache) { m_pNextCache = pCache; };
     /// Cache access from addr to addr+size-1
     bool Access(ADDRINT addr, UINT32 size, ACCESS_BASE::ACCESS_TYPE accessType);
     /// Cache access at addr that does not span cache lines
-    bool AccessSingleLine(ADDRINT addr, ACCESS_BASE::ACCESS_TYPE accessType);
+    unsigned int AccessSingleLine(ADDRINT addr, ACCESS_BASE::ACCESS_TYPE accessType);
 
+	VOID Fini();
     string StatsLong(string prefix, CACHE_TYPE cache_type) const;
   void Dump(ofstream &os);
 };
@@ -388,7 +412,7 @@ bool CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::Access(ADDRINT addr, UINT32 size, AC
  *  @return true if accessed cache line hits
  */
 template <class SET, UINT32 MAX_SETS, UINT32 STORE_ALLOCATION>
-bool CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr, ACCESS_BASE::ACCESS_TYPE accessType)
+unsigned int CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr, ACCESS_BASE::ACCESS_TYPE accessType)
 {
     CACHE_TAG tag;
     UINT32 setIndex;
@@ -398,13 +422,14 @@ bool CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr, ACCES
     SET & set = _sets[setIndex];
 
   UINT32 lineIndex = 0;
-    bool hit = set.Find(tag, lineIndex);
+  bool hit = set.Find(tag, lineIndex);
+  unsigned int nHit = 0;
 
     //assert(STORE_ALLOCATION == CACHE_ALLOC::STORE_NO_ALLOCATE);
     // on miss, loads always allocate, stores optionally
 	if( hit )
 	{
-	   set.HitLRU( lineIndex, accessType == ACCESS_BASE::ACCESS_TYPE_LOAD? false: true);
+	   set.HitLRU( lineIndex, accessType == ACCESS_BASE::ACCESS_TYPE_LOAD? false: true);	   
 	 /*     if( accessType == ACCESS_TYPE_STORE)
 		 {
 			 // write hit, using write-through mode
@@ -415,30 +440,47 @@ bool CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr, ACCES
 	// miss, in write-allocation mode and read-allocation (ie. no read through), just load the block from the next level cache, and then access the
 	else if (  (accessType == ACCESS_BASE::ACCESS_TYPE_LOAD || STORE_ALLOCATION == CACHE_ALLOC::STORE_ALLOCATE))
 	{
-		// for write-back
+		// if needing write-back
 		CACHE_TAG wbTag = set.NeedWriteback();
 		if( wbTag && m_pNextCache )
 		{
 			ADDRINT nAddr = wbTag;
 			nAddr <<= _lineShift;
-			m_pNextCache->AccessSingleLine(nAddr, ACCESS_BASE::ACCESS_TYPE_STORE);    // Assume: cache line l2 size is multiple of l1            ++ _writeback;
+			(void)m_pNextCache->AccessSingleLine(nAddr, ACCESS_BASE::ACCESS_TYPE_STORE);    // Assume: cache line l2 size is multiple of l1            ++ _writeback;
 		}
-			// for replace
-		set.Replace(tag, accessType == ACCESS_BASE::ACCESS_TYPE_LOAD?  false: true);
+			// for replace		
 		if( m_pNextCache)
-			m_pNextCache->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD);      // read from the next level to the current
+			nHit = m_pNextCache->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD);      // read from the next level to the current
+		else
+			g_CurrentCycle += g_memoryLatency;
+		set.Replace(tag, accessType == ACCESS_BASE::ACCESS_TYPE_LOAD?  false: true);
+		 
 	}
 	// write miss, in non-write-allocation, write into lower memory directly
 	else
 	{
-		if( m_pNextCache)			m_pNextCache->AccessSingleLine(addr, accessType);
+		if( m_pNextCache)			nHit = m_pNextCache->AccessSingleLine(addr, accessType);
 	}
     _access[accessType][hit]++;
 
     // ---by qali: for debugging
    // cerr << "access " << hex << addr << ":\tin cache[" << setIndex << "][" << set.GetSpot() << "]--" << (hit?"hit":"miss") << endl;     
 
-    return hit;
+	unsigned int status = nHit;
+	status <<= 1;
+	if( hit )
+		status |= 1;
+	
+	
+    return status;
+}
+
+
+template <class SET, UINT32 MAX_SETS, UINT32 STORE_ALLOCATION>
+void CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::Fini()
+{
+	for(int i=0; i < _setIndexMask; ++ i)
+		_sets[i].Fini();
 }
 
 template <class SET, UINT32 MAX_SETS, UINT32 STORE_ALLOCATION>
@@ -449,30 +491,37 @@ string CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::StatsLong(string prefix, CACHE_TYP
 
     string out;
 
+	out += "==============================================\n";
     out += prefix + _name + ":" + "\n";
 
-    if (cache_type != CACHE_TYPE_ICACHE) {
-       for (UINT32 i = 0; i < ACCESS_BASE::ACCESS_TYPE_NUM; i++)
-       {
-           const ACCESS_BASE::ACCESS_TYPE accessType = (ACCESS_BASE::ACCESS_TYPE)i;
+    if (cache_type == CACHE_TYPE_ICACHE)	
+		out += prefix + "Instruction cache:\n";
+	else if( cache_type == CACHE_TYPE_DCACHE)
+		out += prefix + "Data cache:\n";
+	else if( cache_type == CACHE_TYPE_L2)
+		out +=prefix + "L2:\n";
+		
+   for (UINT32 i = 0; i < ACCESS_BASE::ACCESS_TYPE_NUM; i++)
+   {
+	   const ACCESS_BASE::ACCESS_TYPE accessType = (ACCESS_BASE::ACCESS_TYPE)i;
 
-           std::string type(accessType == ACCESS_BASE::ACCESS_TYPE_LOAD? "Load" : "Store");
+	   std::string type(accessType == ACCESS_BASE::ACCESS_TYPE_LOAD? "Load" : "Store");
 
-           out += prefix + ljstr(type + "-Hits:      ", headerWidth)
-                  + mydecstr(Hits(accessType), numberWidth)  +
-                  ":  " + fltstr(100.0 * Hits(accessType) / Accesses(accessType), 2, 6) + "%\n";
+	   out += prefix + ljstr(type + "-Hits:      ", headerWidth)
+			  + mydecstr(Hits(accessType), numberWidth)  +
+			  ":  " + fltstr(100.0 * Hits(accessType) / Accesses(accessType), 2, 6) + "%\n";
 
-           out += prefix + ljstr(type + "-Misses:    ", headerWidth)
-                  + mydecstr(Misses(accessType), numberWidth) +
-                  ":  " +fltstr(100.0 * Misses(accessType) / Accesses(accessType), 2, 6) + "%\n";
+	   out += prefix + ljstr(type + "-Misses:    ", headerWidth)
+			  + mydecstr(Misses(accessType), numberWidth) +
+			  ":  " +fltstr(100.0 * Misses(accessType) / Accesses(accessType), 2, 6) + "%\n";
 
-           out += prefix + ljstr(type + "-Accesses:  ", headerWidth)
-                  + mydecstr(Accesses(accessType), numberWidth) +
-                  ":  " +fltstr(100.0 * Accesses(accessType) / Accesses(accessType), 2, 6) + "%\n";
+	   out += prefix + ljstr(type + "-Accesses:  ", headerWidth)
+			  + mydecstr(Accesses(accessType), numberWidth) +
+			  ":  " +fltstr(100.0 * Accesses(accessType) / Accesses(accessType), 2, 6) + "%\n";
 
-           out += prefix + "\n";
-       }
-    }
+	   out += prefix + "\n";
+   }
+
 
     out += prefix + ljstr("Total-Hits:      ", headerWidth)
            + mydecstr(Hits(), numberWidth) +
@@ -498,6 +547,8 @@ void CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::Dump(ofstream &os)
 {
    os << endl << endl << StatsLong("##", CACHE_BASE::CACHE_TYPE_DCACHE);
 }
+
+
 
 // define shortcuts
 #endif // PIN_CACHE1_H
