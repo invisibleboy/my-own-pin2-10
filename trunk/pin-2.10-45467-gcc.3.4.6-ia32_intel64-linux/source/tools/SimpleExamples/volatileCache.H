@@ -5,13 +5,18 @@
 #include <iostream>
 #include <fstream>
 //#include "tool.H"
+#define LIHAI
 
 using namespace std;
 
 const ADDRINT RefreshCycle=(53000/16*16);
 ADDRINT g_CurrentCycle;
-ADDRINT g_Intervals[6];
+ADDRINT g_Intervals[3][7];
 ADDRINT g_TotalRefresh;
+ADDRINT g_EndOfImage;    // end of global area
+ADDRINT g_CurrentEsp;    // begin of stack area
+
+int opti_hardware = 0;
 
 namespace CACHE_SET
 {
@@ -19,19 +24,32 @@ namespace CACHE_SET
 	void DumpRefresh(ostream &os)
 	{
 		os << "++++++++++++Refresh info+++++++++++++++" << endl;
+		os << "Refresh Cycle:\t" << RefreshCycle << endl;
 		os << "Total refresh:\t" << g_TotalRefresh << endl;
 		os << "Total cycles:\t" << g_CurrentCycle << endl;
 		
 		ADDRINT nTotal = 0;
+		for( int j =0; j < 3; ++ j)
 		for( int i =0; i < 6; ++ i )
-			nTotal += g_Intervals[i];
-		os << "Cycle distribution:\n";
-		os << "0-16k" << "\t:" << g_Intervals[0] << "\t:" << g_Intervals[0]/nTotal << endl;
-		os << "0-32k" << "\t:" << g_Intervals[1] << "\t:" << g_Intervals[1]/nTotal << endl;
-		os << "0-64k" << "\t:" << g_Intervals[2] << "\t:" << g_Intervals[2]/nTotal << endl;
-		os << "0-128k" << "\t:" << g_Intervals[3] << "\t:" << g_Intervals[3]/nTotal << endl;
-		os << "0-256k" << "\t:" << g_Intervals[4] << "\t:" << g_Intervals[4]/nTotal << endl;
-		os << "0-512k" << "\t:" << g_Intervals[5] << "\t:" << g_Intervals[5]/nTotal << endl;		
+			nTotal += g_Intervals[j][i];
+		os << "Total intervals:\t" << nTotal << endl;
+		os << "Cycle distribution of consecutive auto-refresh (write and miss-load) for blocks:\n";
+		for( int j=0; j < 3; ++ j)
+		{
+			if( j == 0)
+				os << "====Stack area" << endl;
+			else if ( j== 1)
+				os << "====Global area" << endl;
+			else 
+				os << "====Heap area" << endl;
+		os << "0-8k" << "\t:" << g_Intervals[j][0] << "\t:" << g_Intervals[j][0]/((double)nTotal) << endl;
+		os << "8-16k" << "\t:" << g_Intervals[j][1] << "\t:" << g_Intervals[j][1]/((double)nTotal) << endl;
+		os << "16-32k" << "\t:" << g_Intervals[j][2] << "\t:" << g_Intervals[j][2]/((double)nTotal) << endl;
+		os << "32-64k" << "\t:" << g_Intervals[j][3] << "\t:" << g_Intervals[j][3]/((double)nTotal) << endl;
+		os << "64-128k" << "\t:" << g_Intervals[j][4] << "\t:" << g_Intervals[j][4]/((double)nTotal) << endl;
+		os << "128-256k" << "\t:" << g_Intervals[j][5] << "\t:" << g_Intervals[j][5]/((double)nTotal) << endl;
+		os << "256-inf" << "\t:" << g_Intervals[j][6] << "\t:" << g_Intervals[j][6]/((double)nTotal) << endl;		
+		}
 	}
 	
 /*!
@@ -48,6 +66,9 @@ class Volatile_LRU_CACHE_SET
 
 	UINT32 _readPenalty;
 	UINT32 _writePenalty;
+	
+	///////recording the source of the data block
+	UINT32 _source[MAX_ASSOCIATIVITY];
 	
     bool _bDirty[MAX_ASSOCIATIVITY];
 	bool _bValid[MAX_ASSOCIATIVITY];  // to do: no need for one-level cache
@@ -76,35 +97,51 @@ class Volatile_LRU_CACHE_SET
 
 			_bDirty[index] = false;
 			_bValid[index] = false;
+			_refreCount[index] = 0;
         }
     }
+	
+	VOID SetPenalty(UINT32 rPenalty, UINT32 wPenalty)
+	{
+		_readPenalty = rPenalty;
+		_writePenalty = wPenalty;
+	}
+	
     UINT32 GetAssociativity(UINT32 associativity) { return _tagsLastIndex + 1; }
 
-    UINT32 Find(CACHE_TAG tag, UINT32 &lineIndex)
+    UINT32 Find(CACHE_TAG tag, UINT32 &lineIndex, int &nWriteBack)
     {
-        bool result = true;
-
+        bool result = false;
+		nWriteBack = 0;
         for (INT32 index = _tagsLastIndex; index >= 0; index--)
         {
             // this is an ugly micro-optimization, but it does cause a
             // tighter assembly loop for ARM that way ...
-            if(_tags[index] == tag)
-			  {
-			  lineIndex = index;
-			  goto end;
-			  }
+            if(_tags[index] == tag && _bValid[index] )
+			{
+				nWriteBack += Validate(index);
+				if( _bValid[index] )
+				{
+					lineIndex = index;
+					result = true;
+					break;
+				}			  
+			}
         }
-        result = false;
-
-        end: return result;
+       return result;
     }
+/* switch opti_hardware
+ * =0: refresh all valid blocks
+ * =1: refresh all dirty blocks
+ * =2: refresh limited times for dirty blocks
+*/
 
 void HitLRU(UINT32 lineIndex, bool bWrite)
 {
 	g_CurrentCycle += bWrite? _writePenalty: _readPenalty;
-	if( bWrite )
-		Refresh(lineIndex);
 	
+	if( bWrite )        
+		Refresh(lineIndex);
 	  
 	if( _tagsLRU.back() == lineIndex )
 		return;			
@@ -120,13 +157,31 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 		_bDirty[lineIndex] = true;
 }
 
-  void Replace(CACHE_TAG tag, bool bWrite )
+  int Replace(CACHE_TAG tag, bool bWrite )
   {
 	  g_CurrentCycle += bWrite? _writePenalty: _readPenalty;
       UINT32 lineIndex = _tagsLRU.front();
+	  
+	  int nWriteBack = Validate(lineIndex);
+		  
 	  if( _bValid[lineIndex])
 		Refresh(lineIndex);
+	else
+		_refreCount[lineIndex] = g_CurrentCycle;
 
+    // stack, global, heap
+	ADDRINT nAddr = tag << 5;
+	if( nAddr < g_EndOfImage)
+	{
+		_source[lineIndex] = 1;
+	}
+	else if( nAddr > g_CurrentEsp - 1048576)
+	{
+		_source[lineIndex] = 0;
+	}
+	else
+		_source[lineIndex] = 2;
+	
       _tags[lineIndex] = tag;
       _tagsLRU.pop_front();
       _tagsLRU.push_back(lineIndex);
@@ -135,6 +190,7 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 
       if( bWrite)
          _bDirty[lineIndex] = true;
+	  return nWriteBack;
   }
 
   UINT32 NeedWriteback()
@@ -144,26 +200,57 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
       {
           return _tags[lineIndex];
       }
-
       return 0;
   }
   
+ int Validate(UINT32 index)
+ {
+	 int nWriteBack = 0;
+	 if( !_bValid[index] )
+		 return nWriteBack;
+	 if( opti_hardware == 0 )
+		 return nWriteBack;
+	 // below are valid blocks
+	 ADDRINT interval = g_CurrentCycle - _refreCount[index];	 
+	 if( interval < RefreshCycle )
+		 return nWriteBack;
+	// below are dinishing blocks
+	if( !_bDirty[index])
+	{
+		_bValid[index] = false;
+		return nWriteBack;
+	}
+	if( opti_hardware == 1 )  
+		return nWriteBack;
+	// below are dirty dinishing blocks	
+	// opti-2 write-back dirty block older than four-phase
+	if( interval >= RefreshCycle*4 )
+	{
+		 _bValid[index] = false;
+		 g_TotalRefresh += 4;
+		 nWriteBack = 1;
+	}
+	return nWriteBack;		 
+ }
+ 
  void Refresh(UINT32 index)
  {
 	// distribution of intervals
 	ADDRINT interval = g_CurrentCycle - _refreCount[index];
+	if( !(interval & 0xffffffffffffe000LL) )  // 8k
+		++ g_Intervals[_source[index]][0];
 	if( !(interval & 0xffffffffffffc000LL) )		//  16k
-		++ g_Intervals[0];
+		++ g_Intervals[_source[index]][1];
 	else if( !(interval & 0xffffffffffff8000LL ) )    // 32k
-		++ g_Intervals[1];
+		++ g_Intervals[_source[index]][2];
 	else if( !(interval & 0xffffffffffff0000LL) )  // 64k
-		++ g_Intervals[2];
-	else if( !(interval & 0xfffffffffffe0000LL) )
-		++ g_Intervals[3];
-	else if( !(interval & 0xfffffffffffc0000LL) )
-		++ g_Intervals[4];
+		++ g_Intervals[_source[index]][3];
+	else if( !(interval & 0xfffffffffffe0000LL) ) // <128k
+		++ g_Intervals[_source[index]][4];
+	else if( !(interval & 0xfffffffffffc0000LL) ) // <256k
+		++ g_Intervals[_source[index]][5];
 	else 
-		++ g_Intervals[5];
+		++ g_Intervals[_source[index]][6];
 		
 	// number of refreshing
 	ADDRINT nRefresh = interval/RefreshCycle;
@@ -173,17 +260,23 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	_refreCount[index] = g_CurrentCycle;
 	
   }
+  
 
   UINT32 GetSpot()
   {
       return _tagsLRU.back();
   }
   
-  VOID Fini()
+  int Fini()
   {
+	int nWriteback = 0;
 	for (INT32 index = _tagsLastIndex; index >= 0; index--)
+	{
+		nWriteback += Validate(index);
 		if( _bValid[index] )
 			Refresh(index);
+	}
+	return nWriteback;
   }
 };
 
