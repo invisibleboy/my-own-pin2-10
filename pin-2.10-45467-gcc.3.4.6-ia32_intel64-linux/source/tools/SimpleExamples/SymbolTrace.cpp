@@ -33,6 +33,10 @@ KNOB<UINT32> KnobLineSize(KNOB_MODE_WRITEONCE, "pintool",
     "b","32", "cache block size in bytes");
 KNOB<UINT32> KnobAssociativity(KNOB_MODE_WRITEONCE, "pintool",
     "a","4", "cache associativity (1 for direct mapped)");
+KNOB<bool> KnobEnableTrace(KNOB_MODE_WRITEONCE, "pintool",
+	"t", "0", "enbale trace output");
+KNOB<int> KnobOptiHw(KNOB_MODE_WRITEONCE, "pintool",
+	"hw", "0", "hardware optimization: Lihai, Xieyuan, Jason");
 
 /* ===================================================================== */
 /* Data structure                                                  */
@@ -57,6 +61,8 @@ typedef struct ActiveRecord
 /* ===================================================================== */
 /* Global variables */
 /* ===================================================================== */
+extern ADDRINT g_EndOfImage;
+extern ADDRINT g_CurrentEsp;
 set<string> g_UserFuncs;
 map<string, ADDRINT> g_hFuncs;
 map<ADDRINT, FuncRec *> g_hFunc2Recs;
@@ -105,7 +111,7 @@ namespace DL1
     const UINT32 max_associativity = 16; // associativity;
     const CACHE_ALLOC::STORE_ALLOCATION allocation = CACHE_ALLOC::STORE_ALLOCATE;
 	
-	typedef CACHE1<CACHE_SET::LRU_CACHE_SET<max_associativity>, max_sets, allocation> CACHE;
+	typedef CACHE1<CACHE_SET::Volatile_LRU_CACHE_SET<max_associativity>, max_sets, allocation> CACHE;
 }
 
 DL1::CACHE* dl1 = NULL;
@@ -174,6 +180,7 @@ VOID Instruction(INS ins, void * v)
 				IPOINT_BEFORE,  (AFUNPTR) LoadInst, 
 				IARG_ADDRINT, INS_Address(ins),
 				IARG_END);
+	//cout << hex << INS_Address(ins) << endl;
 	// skip stack access here for memory access
 	//if( INS_IsStackRead(ins) || INS_IsStackWrite(ins) )
 		//return;
@@ -231,7 +238,7 @@ int GetUserFunction()
 /* get instruction the stack base/top address                                                                 */
 /* ===================================================================== */
 
-VOID GetActiveRecord(UINT64 nFunc, int nOffset, const CONTEXT *ctxt )
+VOID GetActiveRecord( const CONTEXT *ctxt )
 {
 /*	ADDRINT nEsp = (ADDRINT)PIN_GetContextReg( ctxt, REG_STACK_PTR);
 	ActiveRec *ar = new ActiveRec;
@@ -241,7 +248,8 @@ VOID GetActiveRecord(UINT64 nFunc, int nOffset, const CONTEXT *ctxt )
 	
 	g_hEsp2ARs[nFunc] = ar;*/
 	
-	g_hFunc2Esp[nFunc] = nOffset;
+	//g_hFunc2Esp[nFunc] = nOffset;
+	g_CurrentEsp = (ADDRINT)PIN_GetContextReg( ctxt, REG_STACK_PTR);
 }
 
 VOID OnStackAccess(UINT64 nFunc, UINT32 disp)
@@ -280,14 +288,22 @@ VOID OnStackAccess(UINT64 nFunc, UINT32 disp)
 /* ===================================================================== */
 VOID Image(IMG img, VOID *v)
 {
+	g_EndOfImage = IMG_HighAddress(img);
 	for( SEC sec = IMG_SecHead(img); SEC_Valid(sec); sec = SEC_Next(sec) )
 	{
 		for( RTN rtn = SEC_RtnHead(sec); RTN_Valid(rtn); rtn = RTN_Next(rtn) )
 		{
 			RTN_Open(rtn);
 			string szRtn = RTN_Name(rtn);
+			// collecting ESP value
+			RTN_InsertCall(rtn,
+							IPOINT_BEFORE,
+							AFUNPTR(GetActiveRecord),							
+							IARG_CONTEXT,
+							IARG_END);
+			
 			map<string, ADDRINT>::iterator i2s_p = g_hFuncs.find(szRtn);
-			if( i2s_p != g_hFuncs.end() )
+			if( i2s_p != g_hFuncs.end() && KnobEnableTrace.Value() )
 			{
 				FuncRec *fr = new FuncRec;
 				fr->_name = szRtn;
@@ -360,6 +376,12 @@ VOID Image(IMG img, VOID *v)
 
 VOID Fini(int code, VOID * v)
 {
+	// Finalize the work
+	dl1->Fini();
+	
+	g_outputFile << "#Parameters:\n";
+	g_outputFile << "L1 read/write latency:\t" << g_rLatL1 << "/" << g_wLatL1 << " cycle" << endl;
+	g_outputFile << "Memory read/write latency:\t" << g_rLatL2 << "/" << g_wLatL2 << " cycle" << endl;
 	g_outputFile << il1->StatsLong("#", CACHE_BASE::CACHE_TYPE_ICACHE);
 	g_outputFile << dl1->StatsLong("#", CACHE_BASE::CACHE_TYPE_DCACHE);	
 	CACHE_SET::DumpRefresh(g_outputFile);
@@ -378,16 +400,17 @@ int main(int argc, char *argv[])
     {
         return Usage();
     }    
+	opti_hardware = KnobOptiHw.Value();
 	dl1 = new DL1::CACHE("L1 Data Cache", 
 		KnobCacheSize.Value() * KILO,
 		KnobLineSize.Value(),
 		KnobAssociativity.Value());
-	dl1->SetLatency(2, 4);
+	dl1->SetLatency(g_rLatL1, g_wLatL1);
 	il1 = new IL1::CACHE("L1 Instruction Cache", 
 		KnobCacheSize.Value() * KILO, 
 		KnobLineSize.Value(),
 		KnobAssociativity.Value());
-	il1->SetLatency(2,4);
+	il1->SetLatency(g_rLatL1,g_wLatL1);
     
 	g_traceFile.open(KnobTraceFile.Value().c_str() );
 	g_outputFile.open(KnobOutputFile.Value().c_str() );

@@ -141,7 +141,7 @@ class LRU_CACHE_SET
     }
     UINT32 GetAssociativity(UINT32 associativity) { return _tagsLastIndex + 1; }
 
-    UINT32 Find(CACHE_TAG tag, UINT32 &lineIndex)
+    UINT32 Find(CACHE_TAG tag, UINT32 &lineIndex, int &nWriteback)
     {
         bool result = true;
 
@@ -177,7 +177,7 @@ class LRU_CACHE_SET
             _bDirty[lineIndex] = true;
     }
 
-  void Replace(CACHE_TAG tag, bool bWrite )
+  int Replace(CACHE_TAG tag, bool bWrite )
   {
       UINT32 lineIndex = _tagsLRU.front();
 	  
@@ -190,6 +190,7 @@ class LRU_CACHE_SET
 
       if( bWrite)
          _bDirty[lineIndex] = true;
+	  return 0;
   }
 
   UINT32 NeedWriteback()
@@ -208,9 +209,9 @@ class LRU_CACHE_SET
       return _tagsLRU.back();
   }
   
-  VOID Fini()
+  int Fini()
   {
-	  
+	  return 0;
   }
 };
 
@@ -253,7 +254,7 @@ class CACHE_BASE
     CACHE_STATS _writeback;
     const std::string _name;	
 	
-	UINT32 _readPenalty,
+	UINT32 _readPenalty;
 	UINT32 _writePenalty;
 
   private:    // input params
@@ -370,12 +371,16 @@ class CACHE1 : public CACHE_BASE
         for (UINT32 i = 0; i < NumSets(); i++)
         {
             _sets[i].SetAssociativity(associativity);
-			_sets[i].SetPenalty(_readPenalty, _writePenalty);
+			//_sets[i].SetPenalty(rPenalty, wPenalty);
         }
     }
 
     // modifiers
-	VOID SetLatency(UINT32 rLatency, UINT32 wLatency ) { _readPenalty = rLatency, _writePenalty = wLatency; }
+	VOID SetLatency(UINT32 rPenalty, UINT32 wPenalty ) 
+	{ 
+		for (UINT32 i = 0; i < NumSets(); i++)
+     		_sets[i].SetPenalty(rPenalty, wPenalty);
+	}
   VOID SetNextLevel(CACHE_BASE *pCache) { m_pNextCache = pCache; };
     /// Cache access from addr to addr+size-1
     bool Access(ADDRINT addr, UINT32 size, ACCESS_BASE::ACCESS_TYPE accessType);
@@ -422,7 +427,8 @@ unsigned int CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT add
     SET & set = _sets[setIndex];
 
   UINT32 lineIndex = 0;
-  bool hit = set.Find(tag, lineIndex);
+  int nWriteBack = 0;
+  bool hit = set.Find(tag, lineIndex, nWriteBack);
   unsigned int nHit = 0;
 
     //assert(STORE_ALLOCATION == CACHE_ALLOC::STORE_NO_ALLOCATE);
@@ -441,19 +447,23 @@ unsigned int CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT add
 	else if (  (accessType == ACCESS_BASE::ACCESS_TYPE_LOAD || STORE_ALLOCATION == CACHE_ALLOC::STORE_ALLOCATE))
 	{
 		// if needing write-back
-		CACHE_TAG wbTag = set.NeedWriteback();
-		if( wbTag && m_pNextCache )
+		CACHE_TAG wbTag = set.NeedWriteback();			
+		if( wbTag )
 		{
-			ADDRINT nAddr = wbTag;
-			nAddr <<= _lineShift;
-			(void)m_pNextCache->AccessSingleLine(nAddr, ACCESS_BASE::ACCESS_TYPE_STORE);    // Assume: cache line l2 size is multiple of l1            ++ _writeback;
+			++ _writeback;
+			if(m_pNextCache )
+			{
+				ADDRINT nAddr = wbTag;
+				nAddr <<= _lineShift;			
+				(void)m_pNextCache->AccessSingleLine(nAddr, ACCESS_BASE::ACCESS_TYPE_STORE);    // Assume: cache line l2 size is multiple of l1            ++ _writeback;
+			}
 		}
-			// for replace		
+		// for replace		
 		if( m_pNextCache)
 			nHit = m_pNextCache->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD);      // read from the next level to the current
 		else
 			g_CurrentCycle += g_memoryLatency;
-		set.Replace(tag, accessType == ACCESS_BASE::ACCESS_TYPE_LOAD?  false: true);
+		nWriteBack += set.Replace(tag, accessType == ACCESS_BASE::ACCESS_TYPE_LOAD?  false: true);
 		 
 	}
 	// write miss, in non-write-allocation, write into lower memory directly
@@ -461,6 +471,7 @@ unsigned int CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT add
 	{
 		if( m_pNextCache)			nHit = m_pNextCache->AccessSingleLine(addr, accessType);
 	}
+	_writeback += nWriteBack;
     _access[accessType][hit]++;
 
     // ---by qali: for debugging
@@ -479,8 +490,8 @@ unsigned int CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT add
 template <class SET, UINT32 MAX_SETS, UINT32 STORE_ALLOCATION>
 void CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::Fini()
 {
-	for(int i=0; i < _setIndexMask; ++ i)
-		_sets[i].Fini();
+	for(unsigned int i=0; i < NumSets(); ++ i)
+		_writeback += _sets[i].Fini();
 }
 
 template <class SET, UINT32 MAX_SETS, UINT32 STORE_ALLOCATION>
@@ -492,7 +503,8 @@ string CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::StatsLong(string prefix, CACHE_TYP
     string out;
 
 	out += "==============================================\n";
-    out += prefix + _name + ":" + "\n";
+    out += prefix + _name;
+	out += "("+ mydecstr(CacheSize(), 7) + "," + mydecstr(NumSets(), 2) + "," + mydecstr(Associativity(), 2) + ")\n";
 
     if (cache_type == CACHE_TYPE_ICACHE)	
 		out += prefix + "Instruction cache:\n";
