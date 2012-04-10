@@ -24,7 +24,7 @@ typedef int8_t  INT8;
 typedef int16_t INT16;
 typedef int32_t INT32;
 typedef int64_t INT64;
-typedef uint32_t ADDRINT;
+typedef uint64_t ADDRINT;
 
 
 static inline string ljstr(const string& s, UINT32 width, char padding = ' ')
