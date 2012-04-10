@@ -51,7 +51,7 @@ using namespace std;
 
 
 extern ADDRINT g_CurrentCycle;
-const UINT32 g_memoryLatency =200;
+extern UINT32 g_memoryLatency;
 
 /*!
  *  @brief Cache tag - self clearing on creation
@@ -504,7 +504,7 @@ string CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::StatsLong(string prefix, CACHE_TYP
 
 	out += "==============================================\n";
     out += prefix + _name;
-	out += "("+ mydecstr(CacheSize(), 7) + "," + mydecstr(NumSets(), 2) + "," + mydecstr(Associativity(), 2) + ")\n";
+	out += "("+ mydecstr(CacheSize(), 7) + "," + mydecstr(LineSize(), 2) + "," + mydecstr(Associativity(), 2) + ")\n";
 
     if (cache_type == CACHE_TYPE_ICACHE)	
 		out += prefix + "Instruction cache:\n";

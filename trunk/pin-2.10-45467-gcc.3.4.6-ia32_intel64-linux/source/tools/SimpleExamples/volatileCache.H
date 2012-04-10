@@ -9,13 +9,15 @@
 
 using namespace std;
 
-const ADDRINT RefreshCycle=(53000/16*16);
+extern ADDRINT RefreshCycle;
+UINT32 g_BlockSize;
 ADDRINT g_CurrentCycle;
-ADDRINT g_Intervals[3][7];
+ADDRINT g_Intervals[4][7];
 ADDRINT g_TotalRefresh;
 ADDRINT g_EndOfImage;    // end of global area
 ADDRINT g_CurrentEsp;    // begin of stack area
 
+bool g_bEnableAll = false;
 int opti_hardware = 0;
 
 namespace CACHE_SET
@@ -29,19 +31,21 @@ namespace CACHE_SET
 		os << "Total cycles:\t" << g_CurrentCycle << endl;
 		
 		ADDRINT nTotal = 0;
-		for( int j =0; j < 3; ++ j)
+		for( int j =0; j < 4; ++ j)
 		for( int i =0; i < 6; ++ i )
 			nTotal += g_Intervals[j][i];
 		os << "Total intervals:\t" << nTotal << endl;
 		os << "Cycle distribution of consecutive auto-refresh (write and miss-load) for blocks:\n";
-		for( int j=0; j < 3; ++ j)
+		for( int j=0; j < 4; ++ j)
 		{
 			if( j == 0)
 				os << "====Stack area" << endl;
 			else if ( j== 1)
 				os << "====Global area" << endl;
-			else 
+			else  if( j == 2)
 				os << "====Heap area" << endl;
+			else
+				os << "====Dead block" << endl;
 		os << "0-8k" << "\t:" << g_Intervals[j][0] << "\t:" << g_Intervals[j][0]/((double)nTotal) << endl;
 		os << "8-16k" << "\t:" << g_Intervals[j][1] << "\t:" << g_Intervals[j][1]/((double)nTotal) << endl;
 		os << "16-32k" << "\t:" << g_Intervals[j][2] << "\t:" << g_Intervals[j][2]/((double)nTotal) << endl;
@@ -119,7 +123,7 @@ class Volatile_LRU_CACHE_SET
             // tighter assembly loop for ARM that way ...
             if(_tags[index] == tag && _bValid[index] )
 			{
-				nWriteBack += Validate(index);
+				nWriteBack += Validate(index, g_bEnableAll);
 				if( _bValid[index] )
 				{
 					lineIndex = index;
@@ -141,7 +145,7 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	g_CurrentCycle += bWrite? _writePenalty: _readPenalty;
 	
 	if( bWrite )        
-		Refresh(lineIndex);
+		Refresh(lineIndex, true);
 	  
 	if( _tagsLRU.back() == lineIndex )
 		return;			
@@ -162,15 +166,15 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	  g_CurrentCycle += bWrite? _writePenalty: _readPenalty;
       UINT32 lineIndex = _tagsLRU.front();
 	  
-	  int nWriteBack = Validate(lineIndex);
+	  int nWriteBack = Validate(lineIndex, g_bEnableAll);
 		  
 	  if( _bValid[lineIndex])
-		Refresh(lineIndex);
+		Refresh(lineIndex, false);
 	else
 		_refreCount[lineIndex] = g_CurrentCycle;
 
     // stack, global, heap
-	ADDRINT nAddr = tag << 5;
+	ADDRINT nAddr = tag * g_BlockSize;
 	if( nAddr < g_EndOfImage)
 	{
 		_source[lineIndex] = 1;
@@ -203,8 +207,10 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
       return 0;
   }
   
- int Validate(UINT32 index)
+ int Validate(UINT32 index, bool bEnable)
  {
+	 if( !bEnable )
+		 return 0;
 	 int nWriteBack = 0;
 	 if( !_bValid[index] )
 		 return nWriteBack;
@@ -217,7 +223,7 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	// below are dinishing blocks
 	if( !_bDirty[index])
 	{
-		_bValid[index] = false;
+		_bValid[index] = false;		 
 		return nWriteBack;
 	}
 	if( opti_hardware == 1 )  
@@ -233,24 +239,28 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	return nWriteBack;		 
  }
  
- void Refresh(UINT32 index)
+ void Refresh(UINT32 index, bool bIntra)
  {
 	// distribution of intervals
 	ADDRINT interval = g_CurrentCycle - _refreCount[index];
+	int nArea = _source[index];
+	if( !bIntra )
+		nArea = 3;
 	if( !(interval & 0xffffffffffffe000LL) )  // 8k
-		++ g_Intervals[_source[index]][0];
+		++ g_Intervals[nArea][0];
 	if( !(interval & 0xffffffffffffc000LL) )		//  16k
-		++ g_Intervals[_source[index]][1];
+		++ g_Intervals[nArea][1];
 	else if( !(interval & 0xffffffffffff8000LL ) )    // 32k
-		++ g_Intervals[_source[index]][2];
+		++ g_Intervals[nArea][2];
 	else if( !(interval & 0xffffffffffff0000LL) )  // 64k
-		++ g_Intervals[_source[index]][3];
+		++ g_Intervals[nArea][3];
 	else if( !(interval & 0xfffffffffffe0000LL) ) // <128k
-		++ g_Intervals[_source[index]][4];
+		++ g_Intervals[nArea][4];
 	else if( !(interval & 0xfffffffffffc0000LL) ) // <256k
-		++ g_Intervals[_source[index]][5];
+		++ g_Intervals[nArea][5];
 	else 
-		++ g_Intervals[_source[index]][6];
+		++ g_Intervals[nArea][6];
+		
 		
 	// number of refreshing
 	ADDRINT nRefresh = interval/RefreshCycle;
@@ -272,9 +282,9 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	int nWriteback = 0;
 	for (INT32 index = _tagsLastIndex; index >= 0; index--)
 	{
-		nWriteback += Validate(index);
+		nWriteback += Validate(index, true);
 		if( _bValid[index] )
-			Refresh(index);
+			Refresh(index, false);
 	}
 	return nWriteback;
   }
