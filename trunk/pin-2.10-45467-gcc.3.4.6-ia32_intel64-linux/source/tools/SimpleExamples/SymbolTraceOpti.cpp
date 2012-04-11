@@ -18,6 +18,7 @@
 using namespace std;
 
 #define UINT64 ADDRINT
+#define UINT32 unsigned int
 
 /* ===================================================================== */
 /* Commandline Switches */
@@ -35,10 +36,10 @@ KNOB<UINT32> KnobAssociativity(KNOB_MODE_WRITEONCE, "pintool",
     "a","4", "cache associativity (1 for direct mapped)");
 KNOB<bool> KnobEnableTrace(KNOB_MODE_WRITEONCE, "pintool",
 	"t", "0", "enbale trace output");
-KNOB<UINT32> KnobMemLat(KNOB_MODE_WRITEONCE, "pintool",
-	"m", "300", "memory latency" );
 KNOB<UINT32> KnobRetent(KNOB_MODE_WRITEONCE, "pintool",
 	"r", "53000", "retention time" );
+KNOB<UINT32> KnobMemLat(KNOB_MODE_WRITEONCE, "pintool",
+	"m", "300", "memory latency" );
 KNOB<int> KnobOptiHw(KNOB_MODE_WRITEONCE, "pintool",
 	"hw", "0", "hardware optimization: Lihai, Xieyuan, Jason");
 
@@ -71,8 +72,9 @@ extern UINT32 g_BlockSize;
 set<string> g_UserFuncs;
 map<string, ADDRINT> g_hFuncs;
 map<ADDRINT, FuncRec *> g_hFunc2Recs;
+map<ADDRINT, ActiveRec *> g_hEsp2ARs;
 
-map<int, map<ADDRINT, ADDRINT> > g_DataMap;
+map<ADDRINT, map<ADDRINT, ADDRINT> > g_DataMap;
 
 ofstream g_traceFile;
 ofstream g_outputFile;
@@ -84,14 +86,11 @@ map<ADDRINT, UINT32> g_hCurrentFunc;
 ADDRINT RefreshCycle;
 UINT32 g_memoryLatency;
 
-ADDRINT g_testCounter = 0;
-
 // latency
 const ADDRINT g_rLatL1 = 2;
 const ADDRINT g_wLatL1 = 4;
-const ADDRINT g_rLatL2 = 200;
-const ADDRINT g_wLatL2 = 200;
 
+ADDRINT g_testCounter = 0;
 // trace output
 namespace Graph
 {
@@ -157,217 +156,142 @@ IL1::CACHE* il1 = NULL;
 VOID LoadInst(ADDRINT addr)
 {
 	//cerr << "LoadInst for " << hex << addr << ": " << ++g_testCounter << endl;
-	(void)il1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD);
+
+	(void)il1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD, 0);
+		
 }
 /* ===================================================================== */
 
-VOID LoadSingle(ADDRINT addr)
+VOID LoadSingle(ADDRINT addr, int nArea)
 {
 	//cerr << "LoadSingle for " << addr << endl;
 	map<ADDRINT, ADDRINT> &dataMap = g_DataMap[0];
-	if( dataMap.find(addr) != dataMap.end() )
+	map<ADDRINT, ADDRINT>::iterator d_p = dataMap.find(addr);
+	if( d_p != dataMap.end() )
 	{
-		(void)dl1->AccessSingleLine(dataMap[addr], ACCESS_BASE::ACCESS_TYPE_LOAD);
+		(void)dl1->AccessSingleLine(d_p->second, ACCESS_BASE::ACCESS_TYPE_LOAD, nArea);
+		cerr << endl << addr << " -> " << d_p->second ;
 	}
 	else
-		(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD);
+		(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD, nArea);
 }
 /* ===================================================================== */
 
-VOID StoreSingle(ADDRINT addr)
-{
-	//cerr << "StoreSingle for " << addr << endl;
-	
-	map<ADDRINT, ADDRINT> &dataMap = g_DataMap[0];
-	if( dataMap.find(addr) != dataMap.end() )
-	{
-		//cerr << endl  << addr << " -> " << dataMap[addr] << endl;
-		(void)dl1->AccessSingleLine(dataMap[addr], ACCESS_BASE::ACCESS_TYPE_STORE);
-	}
-	else
-		(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE);		
-}
-
-
-/* ===================================================================== */
-VOID Instruction(INS ins, void * v)
-{			
-	INS_InsertPredicatedCall(ins, 
-				IPOINT_BEFORE,  (AFUNPTR) LoadInst, 
-				IARG_ADDRINT, INS_Address(ins),
-				IARG_END);
-	
-	// skip stack access here for memory access
-	//if( INS_IsStackWrite(ins) )
-	//	return;    
-}
-VOID OnMemory(INS ins)
-{
-	if (INS_IsMemoryRead(ins))
-    {
-        // map sparse INS addresses to dense IDs
-        //const UINT32 size = INS_MemoryReadSize(ins);      
-		INS_InsertPredicatedCall(
-			ins, IPOINT_BEFORE, (AFUNPTR) LoadSingle,
-			IARG_MEMORYREAD_EA,
-			IARG_CONTEXT,
-			IARG_END);		
-    }        
-    else if ( INS_IsMemoryWrite(ins) )
-    {
-        // map sparse INS addresses to dense IDs  
-		INS_InsertPredicatedCall(
-			ins, IPOINT_BEFORE,  (AFUNPTR) StoreSingle,
-			IARG_MEMORYWRITE_EA,
-			IARG_CONTEXT,
-			IARG_END);		
-    }
-}
-/* ===================================================================== */
-/* get user functions from a external file                                                                  */
-/* ===================================================================== */
-
-int GetUserFunction()
-{
-	ifstream inf;
-	inf.open("userfunc");
-	while(inf.good() )
-	{
-		string szLine;
-		getline( inf, szLine);
-		
-		if( szLine.size() < 4 ) 
-			continue;
-		stringstream ss(szLine);
-		
-		ADDRINT nID;
-		string szFunc;
-		ss >> nID >> szFunc;
-		cout << nID << ":" << szFunc << endl;
-		
-		g_hFuncs[szFunc] = nID;
-		//g_UserFuncs.insert(szLine);	
-		
-	}
-	return 0;
-}
-
-/* ===================================================================== */
-/* get instruction the stack base/top address                                                                 */
-/* ===================================================================== */
-VOID StackAccess(UINT64 nFunc, UINT32 oriDisp, ADDRINT oriAddr, bool bRead)
+VOID StoreSingle(ADDRINT addr, int nArea)
 {	
+	map<ADDRINT, ADDRINT> &dataMap = g_DataMap[0];
+	map<ADDRINT, ADDRINT>::iterator d_p = dataMap.find(addr);
+	if( d_p != dataMap.end() )
+	{
+		(void)dl1->AccessSingleLine(d_p->second, ACCESS_BASE::ACCESS_TYPE_STORE, nArea);
+		cerr << endl << addr << " -> " << d_p->second ;
+	}
+	else
+		(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE, nArea);
+}
+
+
+VOID OnStackAccess( ADDRINT nFunc, int oriDisp, ADDRINT oriAddr, bool bRead)
+{
 	ADDRINT addr = oriAddr;
 	map<ADDRINT, ADDRINT> dataMap = g_DataMap[nFunc];
-	if( dataMap.find(oriDisp) != dataMap.end() )
+	map<ADDRINT, ADDRINT>::iterator d_p = dataMap.find(oriDisp);
+	if( d_p != dataMap.end() )
 	{
-		int disp2 = (int) dataMap[oriDisp];
+		int disp2 = (int) d_p->second;
 		int disp1 = (int) oriDisp;
+		cerr << endl << addr << "(" << disp1 << ") -> " << addr+disp2-disp1 << "(" << disp2 << ")";
 		
-		addr = oriAddr + disp2 - disp1;
+		addr = oriAddr + disp2 - disp1;		
 	}
 	
 	//cerr << endl << addr << "(" << disp1 << ") -> " << addr+disp2-disp1 << "(" << disp2 << ")";
 	if( bRead)
-		(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD);
+		(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD, 0);
 	else
-		(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE);	
-	
-}
-VOID OnStack(INS ins, UINT32 nFunc)
-{	
-	bool bRead = INS_IsStackRead(ins);
-	ADDRINT disp = INS_MemoryDisplacement(ins);	
-	if( bRead )
-		INS_InsertCall(ins,
-			IPOINT_BEFORE, AFUNPTR(StackAccess),
-			IARG_UINT32, nFunc,
-			IARG_UINT32, disp,
-			IARG_MEMORYREAD_EA,
-			IARG_BOOL, bRead,
-			//IARG_BOOL, bEsp,
-			IARG_END);			
-	else
-		INS_InsertCall(ins,
-			IPOINT_BEFORE, AFUNPTR(StackAccess),
-			IARG_UINT32, nFunc,
-			IARG_UINT32, disp,
-			IARG_MEMORYWRITE_EA,
-			IARG_BOOL, bRead,
-			//IARG_BOOL, bEsp,
-			IARG_END);	
-}
-
-VOID GetActiveRecord( const CONTEXT *ctxt )
-{
-	g_CurrentEsp = (ADDRINT)PIN_GetContextReg( ctxt, REG_STACK_PTR);
-	//cerr << endl << "Current Esp:\t" << g_CurrentEsp;
+		(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE, 0);	
 }
 /* ===================================================================== */
 /* get user functions' instruction-start and instruction-end addresses                                                                 */
 /* ===================================================================== */
 VOID Image(IMG img, VOID *v)
 {
-	g_EndOfImage = IMG_HighAddress(img);
-	//cerr << endl << "End of image:\t" << g_EndOfImage << endl;
-	for( SEC sec = IMG_SecHead(img); SEC_Valid(sec); sec = SEC_Next(sec) )
+	int nArea = 0;     // 0 for stack, 1 for global, 2 for heap
+	
+	ifstream inf;
+	inf.open("trace");
+	string szLine;
+	while(inf.good())
 	{
-		for( RTN rtn = SEC_RtnHead(sec); RTN_Valid(rtn); rtn = RTN_Next(rtn) )
+		getline(inf, szLine);
+		if( szLine.size() < 1)
+			continue;
+		if( 'I' == szLine[0] )
 		{
-			RTN_Open(rtn);
-			string szRtn = RTN_Name(rtn);
-			RTN_InsertCall(rtn,
-				IPOINT_BEFORE,
-				AFUNPTR(GetActiveRecord),							
-				IARG_CONTEXT,
-				IARG_END);	
+			ADDRINT addr;
+			string szAddr = szLine.substr(2);
+			stringstream ss(szAddr);
+			ss >> addr;
 			
-			map<string, ADDRINT>::iterator i2s_p = g_hFuncs.find(szRtn);
-			if( i2s_p != g_hFuncs.end() )
-			{				
-				//cerr << "Collect instruction address for " << hex << szRtn << endl;	
-				
-				// 1. track the change of stack frame by user functions, by searching "sub $24, esp"
-				for( INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins) )
-				{
-					//cout << hex << INS_Address(ins) << endl;
-					//Instruction(ins, NULL);					
-		
-					// 2. track stack access by user functions
-					// instruction accesses memory relative to ESP or EBP, the latter may be used
-					// as a general register and thus mislead the judgement
-					bool bTrack = false;
-					if( INS_IsStackRead(ins) || INS_IsStackWrite(ins) )
-					{						
-						ADDRINT disp = INS_MemoryDisplacement(ins);						
-						bool bEsp = false;
-						if( INS_MemoryBaseReg(ins) == REG_STACK_PTR )
-							bEsp = true;						
-						// track stack write access by ESP+0x23					
-						if(disp != 0 && bEsp)
-							bTrack = true;						
-					}
-					
-					Instruction(ins, v);
-					if( bTrack)
-					{						
-						OnStack(ins, i2s_p->second);
-					}
-					else
-					{						
-						OnMemory(ins);
-					}
-				}
-			}
-			else
+			LoadInst(addr);			
+		}
+		else if( 'R' == szLine[0] || 'W' == szLine[0])
+		{
+			bool bRead = ('R' == szLine[0]);
+			// R:S:4200208:12:14073623860994
+			if( 'S' == szLine[2] )
 			{
-				for( INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins) )
-				{
-					Instruction(ins,v);
-					OnMemory(ins);
-				}
+				UINT32 index1 = szLine.find(':', 4);
+				string szStr = szLine.substr(4, index1-4);
+				stringstream ss1(szStr);
+				ADDRINT nFunc;
+				ss1 >> nFunc;
+				
+				
+				UINT32 index2 = szLine.find(':', index1+1);
+				szStr=szLine.substr(index1+1, index2-index1-1);
+				int disp;
+				stringstream ss2(szStr);
+				ss2 >> disp;
+				
+				szStr = szLine.substr(index2+1);
+				ADDRINT addr;
+				stringstream ss3(szStr);
+				ss3 >> addr;
+				
+				OnStackAccess(nFunc, disp, addr, bRead);			
 			}
-			RTN_Close(rtn);
+			// W:G:6962120
+			else if( 'G' == szLine[2])
+			{
+				nArea = 1;
+				ADDRINT addr;
+				string szAddr = szLine.substr(4);
+				stringstream ss(szAddr);
+				ss >> addr;
+				if( bRead)
+					LoadSingle(addr, nArea);	
+				else
+					StoreSingle(addr, nArea);
+			}
+			else if( 'H' == szLine[2] )
+			{
+				nArea = 2;
+				ADDRINT addr;
+				string szAddr = szLine.substr(4);
+				stringstream ss(szAddr);
+				ss >> addr;
+				
+				if(bRead)
+					LoadSingle(addr, nArea);	
+				else
+					StoreSingle(addr, nArea);
+			}
+		}
+		else if( '#' == szLine[0])
+		{
+			stringstream ss(szLine.substr(1));
+			ss >> g_EndOfImage;
 		}
 	}	
 }
@@ -386,67 +310,11 @@ VOID Fini(int code, VOID * v)
 	g_outputFile << dl1->StatsLong("#", CACHE_BASE::CACHE_TYPE_DCACHE);	
 	CACHE_SET::DumpRefresh(g_outputFile);
 	g_outputFile.close();
-	g_traceFile.close();	
-}
-/* ===================================================================== */
-/* Main                                                                  */
-/* ===================================================================== */
-void ReadMap(ifstream &inf);
-
-int main(int argc, char *argv[])
-{
-    PIN_InitSymbols();
-
-    if( PIN_Init(argc,argv) )
-    {
-        return Usage();
-    }    
+	g_traceFile.close();
 	
-	ifstream inf;
-	inf.open("alloc.txt");
-	if( !inf.good())
-		cerr << "Failed to open alloc.txt" << endl;
-	ReadMap(inf);
-	inf.close();
-	
-	opti_hardware = KnobOptiHw.Value();
-	dl1 = new DL1::CACHE("L1 Data Cache", 
-		KnobCacheSize.Value() * KILO,
-		KnobLineSize.Value(),
-		KnobAssociativity.Value());
-	dl1->SetLatency(g_rLatL1, g_wLatL1);
-	il1 = new IL1::CACHE("L1 Instruction Cache", 
-		KnobCacheSize.Value() * KILO, 
-		KnobLineSize.Value(),
-		KnobAssociativity.Value());
-	il1->SetLatency(g_rLatL1,g_wLatL1);
-	
-	g_BlockSize = KnobLineSize.Value();
-    RefreshCycle = KnobRetent.Value()/4*4;
-	g_memoryLatency = KnobMemLat.Value();
-	
-	g_traceFile.open(KnobTraceFile.Value().c_str() );
-	g_outputFile.open(KnobOutputFile.Value().c_str() );
-	
-	if(!g_traceFile.good())
-		cerr << "Failed to open " << KnobTraceFile.Value().c_str();
-	if(!g_outputFile.good())
-		cerr << "Failed to open " << KnobOutputFile.Value().c_str();
-	
-	// 1. Collect user functions from a external file
-	GetUserFunction();
-	// 2. Collect the start address of user functions
-	IMG_AddInstrumentFunction(Image, 0);
-	// 3. Collect dynamic stack base address when function-calling
-	// 4. Deal with each instruction	
-    //INS_AddInstrumentFunction(Instruction, 0);
-    PIN_AddFiniFunction(Fini, 0);
-
-    // Never returns
-
-    PIN_StartProgram();
-    
-    return 0;
+	ofstream outf("graph");
+	Graph::DumpGraph(outf);
+	outf.close();
 }
 
 void ReadMap(ifstream &inf)
@@ -471,7 +339,7 @@ void ReadMap(ifstream &inf)
 			string szRep = szLine.substr(0,index);
 			stringstream ss(szRep);
 			ss >> rep;
-			continue;
+			//continue;
 		}
 		
 		while( (index=szLine.find(";") ) != 0xffffffff)
@@ -487,40 +355,107 @@ void ReadMap(ifstream &inf)
 		}
 	} 
 }
+
+/* ===================================================================== */
+/* Main                                                                  */
+/* ===================================================================== */
+
+int main(int argc, char *argv[])
+{
+    PIN_InitSymbols();
+
+    if( PIN_Init(argc,argv) )
+    {
+        return Usage();
+    }    
+	
+	ifstream inf;
+	inf.open("alloc.txt");
+	if( !inf.good())
+		cerr << "Failed to open alloc.txt" << endl;
+	ReadMap(inf);
+	inf.close();
+
+	
+	dl1 = new DL1::CACHE("L1 Data Cache", 
+		KnobCacheSize.Value() * KILO,
+		KnobLineSize.Value(),
+		KnobAssociativity.Value());
+	dl1->SetLatency(g_rLatL1, g_wLatL1);
+	il1 = new IL1::CACHE("L1 Instruction Cache", 
+		KnobCacheSize.Value() * KILO, 
+		KnobLineSize.Value(),
+		KnobAssociativity.Value());
+	il1->SetLatency(g_rLatL1,g_wLatL1);
+	
+	opti_hardware = KnobOptiHw.Value();
+	g_BlockSize = KnobLineSize.Value();
+	RefreshCycle = KnobRetent.Value()/4*4;
+	g_memoryLatency = KnobMemLat.Value();
+    
+	g_traceFile.open(KnobTraceFile.Value().c_str() );
+	g_outputFile.open(KnobOutputFile.Value().c_str() );
+	
+	if(!g_traceFile.good())
+		cerr << "Failed to open " << KnobTraceFile.Value().c_str();
+	if(!g_outputFile.good())
+		cerr << "Failed to open " << KnobOutputFile.Value().c_str();
+	
+	// 1. Collect user functions from a external file
+	// 2. Collect the start address of user functions
+	IMG_AddInstrumentFunction(Image, 0);
+	// 3. Collect dynamic stack base address when function-calling
+	// 4. Deal with each instruction	
+    //INS_AddInstrumentFunction(Instruction, 0);
+    PIN_AddFiniFunction(Fini, 0);
+
+    // Never returns
+
+    PIN_StartProgram();
+    
+    return 0;
+}
+
 void Graph::DumpGraph(ostream &os)
 {
 	os << "###0" << endl;
 	map<ADDRINT, map<ADDRINT, ADDRINT> >::iterator i2i_p = g_gGraph.begin(), i2i_e = g_gGraph.end();
 	for(; i2i_p != i2i_e; ++ i2i_p)
 	{
-		os << i2i_p->first << ":\t";
+		os << i2i_p->first << ":" << endl;
 		map<ADDRINT, ADDRINT>::iterator i_p = i2i_p->second.begin(), i_e = i2i_p->second.end();
 		int i = 0;
 		for(; i_p != i_e; ++ i_p)
 		{
-			++ i;
-			os << i_p->first << "  " << i_p->second << ";\t";
-			if( i %6 == 0)
-				os << endl;
+			if( i_p->second != 0)
+			{
+				++ i;
+				os << i_p->first << "  " << i_p->second << ";\t";
+				if( i %6 == 0)
+					os << endl;
+			}
 		}
 		os << endl;
 	}
 	map<UINT32, map<int, map<int, ADDRINT> > >::iterator i2i2i_p = g_graph.begin(), i2i2i_e = g_graph.end();
 	for(; i2i2i_p != i2i2i_e; ++ i2i2i_p)
 	{
-		os << "###" << i2i2i_p->first <<":\t";
+		os << "###" << i2i2i_p->first << endl;
 		map<int, map<int, ADDRINT> >::iterator i2i_p = i2i2i_p->second.begin(), i2i_e = i2i2i_p->second.end();
 		for(; i2i_p != i2i_e; ++ i2i_p)
 		{
-			os << i2i_p->first << ":\t";
+			os << i2i_p->first << ":" << endl;
 			map<int, ADDRINT>::iterator i_p = i2i_p->second.begin(), i_e = i2i_p->second.end();
 			int i = 0;
 			for(; i_p != i_e; ++ i_p)
 			{
-				++ i;
-				os << i_p->first << "  " << i_p->second << ";\t";
-				if( i %6 == 0)
-					os << endl;
+				if( i_p->second != 0)
+				{
+					++ i;
+					os << i_p->first << "  " << i_p->second << ";\t";
+					if( i %6 == 0)
+						os << endl;
+				}
 			}
 			os << endl;			
 		}
