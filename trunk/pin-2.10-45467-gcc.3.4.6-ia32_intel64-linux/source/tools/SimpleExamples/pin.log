@@ -1,2 +1,0 @@
-Pin 2.10 kit 45445
-E: Unable to load /home/gpu/qali/pin-2.10-45467-gcc.3.4.6-ia32_intel64-linux/source/tools/SimpleExamples/obj-intel64/SymbolTraceOpti.so: /home/gpu/qali/pin-2.10-45467-gcc.3.4.6-ia32_intel64-linux/source/tools/SimpleExamples/obj-intel64/SymbolTraceOpti.so: undefined symbol: RefreshCycle

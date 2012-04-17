@@ -60,7 +60,7 @@ endif
 ##############################################################
 
 TOOL_ROOTS = dcache edgcnt pinatrace trace icount inscount2_mt opcodemix malloctrace calltrace \
-             jumpmix toprtn catmix regmix ilenmix coco writeTrace cacheWithBuffer floatPoint hybridCache SymbolTrace SymbolTraceOpti
+             jumpmix toprtn catmix regmix ilenmix coco writeTrace cacheWithBuffer floatPoint hybridCache SymbolTrace SymbolTraceOpti qaliTrace
 
 ifneq ($(TARGET),ia32e)
     TOOL_ROOTS += topopcode 
@@ -96,7 +96,7 @@ SANITY_TOOLS = opcodemix$(PINTOOL_SUFFIX)
 # leave out fence, see comment at top of fence.cpp
 
 TEST_TOOLS_ROOTS = dcache edgcnt pinatrace trace icount opcodemix  malloctrace calltrace \
-                   jumpmix toprtn catmix regmix inscount2_mt coco writeTrace cacheWithBuffer floatPoint hybridCache SymbolTrace SymbolTraceOpti
+                   jumpmix toprtn catmix regmix inscount2_mt coco writeTrace cacheWithBuffer floatPoint hybridCache SymbolTrace SymbolTraceOpti qaliTrace
 ifeq ($(TARGET),ia32)
     TEST_TOOLS_ROOTS +=  emuload extmix xed-use xed-print ldstmix 
     ifeq (${TARGET_OS},l)

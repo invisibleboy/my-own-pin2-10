@@ -177,7 +177,7 @@ class LRU_CACHE_SET
             _bDirty[lineIndex] = true;
     }
 
-  int Replace(CACHE_TAG tag, bool bWrite )
+  int Replace(CACHE_TAG tag, bool bWrite, int nArea )
   {
       UINT32 lineIndex = _tagsLRU.front();
 	  
@@ -314,7 +314,7 @@ protected:
         SplitAddress(addr, tag, setIndex);
     }
 
-  virtual unsigned int AccessSingleLine(ADDRINT addr, ACCESS_BASE::ACCESS_TYPE accessType) { cout << "AccessSingleLine in Base1\n"; return true;};
+  virtual unsigned int AccessSingleLine(ADDRINT addr, ACCESS_BASE::ACCESS_TYPE accessType, int nArea) { cout << "AccessSingleLine in Base1\n"; return true;};
 
     virtual string StatsLong(string prefix = "", CACHE_TYPE = CACHE_TYPE_DCACHE) const { return "StatsLong in Base1";};
 };
@@ -338,11 +338,6 @@ CACHE_BASE::CACHE_BASE(std::string name, UINT32 cacheSize, UINT32 lineSize, UINT
         _access[accessType][true] = 0;
     }
 }
-
-/*!
- *  @brief Stats output method*/
-
-
 
 /*!
  *  @brief Templated cache class with specific cache set allocation policies
@@ -383,9 +378,9 @@ class CACHE1 : public CACHE_BASE
 	}
   VOID SetNextLevel(CACHE_BASE *pCache) { m_pNextCache = pCache; };
     /// Cache access from addr to addr+size-1
-    bool Access(ADDRINT addr, UINT32 size, ACCESS_BASE::ACCESS_TYPE accessType);
+    bool Access(ADDRINT addr, UINT32 size, ACCESS_BASE::ACCESS_TYPE accessType, int nArea);
     /// Cache access at addr that does not span cache lines
-    unsigned int AccessSingleLine(ADDRINT addr, ACCESS_BASE::ACCESS_TYPE accessType);
+    unsigned int AccessSingleLine(ADDRINT addr, ACCESS_BASE::ACCESS_TYPE accessType, int nArea);
 
 	VOID Fini();
     string StatsLong(string prefix, CACHE_TYPE cache_type) const;
@@ -397,7 +392,7 @@ class CACHE1 : public CACHE_BASE
  */
 
 template <class SET, UINT32 MAX_SETS, UINT32 STORE_ALLOCATION>
-bool CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::Access(ADDRINT addr, UINT32 size, ACCESS_BASE::ACCESS_TYPE accessType)
+bool CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::Access(ADDRINT addr, UINT32 size, ACCESS_BASE::ACCESS_TYPE accessType, int nArea)
 {
     const ADDRINT highAddr = addr + size;
 
@@ -405,7 +400,7 @@ bool CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::Access(ADDRINT addr, UINT32 size, AC
     const ADDRINT notLineMask = ~(lineSize - 1);
     do
     {
-       AccessSingleLine(addr, accessType);
+       AccessSingleLine(addr, accessType, nArea);
         addr = (addr & notLineMask) + lineSize; // start of next cache line
     }
     while (addr < highAddr);
@@ -417,7 +412,7 @@ bool CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::Access(ADDRINT addr, UINT32 size, AC
  *  @return true if accessed cache line hits
  */
 template <class SET, UINT32 MAX_SETS, UINT32 STORE_ALLOCATION>
-unsigned int CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr, ACCESS_BASE::ACCESS_TYPE accessType)
+unsigned int CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr, ACCESS_BASE::ACCESS_TYPE accessType, int nArea)
 {
     CACHE_TAG tag;
     UINT32 setIndex;
@@ -455,21 +450,21 @@ unsigned int CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT add
 			{
 				ADDRINT nAddr = wbTag;
 				nAddr <<= _lineShift;			
-				(void)m_pNextCache->AccessSingleLine(nAddr, ACCESS_BASE::ACCESS_TYPE_STORE);    // Assume: cache line l2 size is multiple of l1            ++ _writeback;
+				(void)m_pNextCache->AccessSingleLine(nAddr, ACCESS_BASE::ACCESS_TYPE_STORE, nArea);    // Assume: cache line l2 size is multiple of l1            ++ _writeback;
 			}
 		}
 		// for replace		
 		if( m_pNextCache)
-			nHit = m_pNextCache->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD);      // read from the next level to the current
+			nHit = m_pNextCache->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD, nArea);      // read from the next level to the current
 		else
 			g_CurrentCycle += g_memoryLatency;
-		nWriteBack += set.Replace(tag, accessType == ACCESS_BASE::ACCESS_TYPE_LOAD?  false: true);
+		nWriteBack += set.Replace(tag, accessType == ACCESS_BASE::ACCESS_TYPE_LOAD?  false: true, nArea);
 		 
 	}
 	// write miss, in non-write-allocation, write into lower memory directly
 	else
 	{
-		if( m_pNextCache)			nHit = m_pNextCache->AccessSingleLine(addr, accessType);
+		if( m_pNextCache)			nHit = m_pNextCache->AccessSingleLine(addr, accessType, nArea);
 	}
 	_writeback += nWriteBack;
     _access[accessType][hit]++;

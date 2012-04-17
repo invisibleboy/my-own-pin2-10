@@ -18,6 +18,7 @@
 using namespace std;
 
 #define UINT64 ADDRINT
+#define UINT32 unsigned int
 
 /* ===================================================================== */
 /* Commandline Switches */
@@ -86,8 +87,6 @@ UINT32 g_memoryLatency;
 // latency
 const ADDRINT g_rLatL1 = 2;
 const ADDRINT g_wLatL1 = 4;
-const ADDRINT g_rLatL2 = 200;
-const ADDRINT g_wLatL2 = 200;
 
 ADDRINT g_testCounter = 0;
 // trace output
@@ -156,23 +155,21 @@ VOID LoadInst(ADDRINT addr)
 {
 	//cerr << "LoadInst for " << hex << addr << ": " << ++g_testCounter << endl;
 
-	(void)il1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD);
+	(void)il1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD, 0);
 		
 }
 /* ===================================================================== */
 
-VOID LoadSingle(ADDRINT addr)
+VOID LoadSingle(ADDRINT addr, int nArea)
 {
 	//cerr << "LoadSingle for " << addr << endl;
-	(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD);
-
+	(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD, nArea);
 }
 /* ===================================================================== */
 
-VOID StoreSingle(ADDRINT addr)
+VOID StoreSingle(ADDRINT addr, int nArea)
 {	
-	(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE);		
-	
+	(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE, nArea);
 	if( addr < g_EndOfImage)   // track global area
 	{
 		//cerr << "StoreSingle for " <<dec <<  addr << "\tcycle:\t" << g_CurrentCycle << endl;
@@ -197,91 +194,10 @@ VOID StoreSingle(ADDRINT addr)
 }
 
 
-/* ===================================================================== */
-VOID Instruction(INS ins, void * v)
-{		
-	INS_InsertPredicatedCall(ins, 
-				IPOINT_BEFORE,  (AFUNPTR) LoadInst, 
-				IARG_ADDRINT, INS_Address(ins),
-				IARG_END);
-	// skip stack access here for memory access
-	//if( INS_IsStackRead(ins) || INS_IsStackWrite(ins) )
-		//return;   
-}
-
-void OnMemory(INS ins, void *v)
+VOID OnStackWrite( ADDRINT nFunc, int disp, ADDRINT addr, bool bRead)
 {
-	 if (INS_IsMemoryRead(ins))
-    {
-        // map sparse INS addresses to dense IDs
-        //const UINT32 size = INS_MemoryReadSize(ins);      
-		INS_InsertPredicatedCall(
-			ins, IPOINT_BEFORE, (AFUNPTR) LoadSingle,
-			IARG_MEMORYREAD_EA,
-			IARG_CONTEXT,
-			IARG_END);		
-    }        
-    else if ( INS_IsMemoryWrite(ins) )
-    {
-        // map sparse INS addresses to dense IDs  
-		INS_InsertPredicatedCall(
-			ins, IPOINT_BEFORE,  (AFUNPTR) StoreSingle,
-			IARG_MEMORYWRITE_EA,
-			IARG_CONTEXT,
-			IARG_END);		
-    }
-}
-/* ===================================================================== */
-/* get user functions from a external file                                                                  */
-/* ===================================================================== */
-
-int GetUserFunction()
-{
-	ifstream inf;
-	inf.open("userfunc");
-	while(inf.good() )
-	{
-		string szLine;
-		getline( inf, szLine);
-		
-		if( szLine.size() < 4 ) 
-			continue;
-		stringstream ss(szLine);
-		
-		ADDRINT nID;
-		string szFunc;
-		ss >> nID >> szFunc;
-		cout << nID << ":" << szFunc << endl;
-		
-		g_hFuncs[szFunc] = nID;
-		//g_UserFuncs.insert(szLine);	
-		
-	}
-	return 0;
-}
-
-/* ===================================================================== */
-/* get instruction the stack base/top address                                                                 */
-/* ===================================================================== */
-VOID GetActiveRecord( const CONTEXT *ctxt )
-{
-/*	ADDRINT nEsp = (ADDRINT)PIN_GetContextReg( ctxt, REG_STACK_PTR);
-	ActiveRec *ar = new ActiveRec;
-	ar->_func = nFunc;
-	ar->_subValue = nOffset;
-	ar->_esp = nEsp; 
+	(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE, 0);		
 	
-	g_hEsp2ARs[nFunc] = ar;*/
-	
-	//g_hFunc2Esp[nFunc] = nOffset;
-	g_CurrentEsp = (ADDRINT)PIN_GetContextReg( ctxt, REG_STACK_PTR);
-}
-
-VOID StackWrite(ADDRINT addr, UINT64 nFunc, UINT32 oriDisp)
-{	
-	(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE);	
-	
-	int disp = (int) oriDisp;
 	map<int, map<int, ADDRINT> > &graph = Graph::g_graph[nFunc];
 	list<Graph::Object> &trace = Graph::g_trace[nFunc];
 	list<Graph::Object>::iterator i_p = trace.begin(), i_e = trace.end();
@@ -299,105 +215,95 @@ VOID StackWrite(ADDRINT addr, UINT64 nFunc, UINT32 oriDisp)
 	Graph::Object object;
 	object._cycle = g_CurrentCycle;
 	object._object = disp;
-	trace.push_front(object);
-}
-
-VOID OnStackWrite(INS ins, UINT64 nFunc)
-{
-	ADDRINT disp = INS_MemoryDisplacement(ins);
-	INS_InsertCall(ins,
-		IPOINT_BEFORE, AFUNPTR(StackWrite),		
-		IARG_UINT32, nFunc,
-		IARG_UINT32, disp,
-		//IARG_BOOL, bRead,
-		//IARG_BOOL, bEsp,
-		IARG_END);					
+	trace.push_front(object);	
 }
 /* ===================================================================== */
 /* get user functions' instruction-start and instruction-end addresses                                                                 */
 /* ===================================================================== */
 VOID Image(IMG img, VOID *v)
 {
-	g_EndOfImage = IMG_HighAddress(img);
-	cerr << endl << "End of image:\t" << g_EndOfImage << endl;
-	for( SEC sec = IMG_SecHead(img); SEC_Valid(sec); sec = SEC_Next(sec) )
+	int nArea = 0;     // 0 for stack, 1 for global, 2 for heap
+	
+	ifstream inf;
+	inf.open("trace");
+	string szLine;
+	while(inf.good())
 	{
-		for( RTN rtn = SEC_RtnHead(sec); RTN_Valid(rtn); rtn = RTN_Next(rtn) )
+		getline(inf, szLine);
+		if( szLine.size() < 1)
+			continue;
+		if( 'I' == szLine[0] )
 		{
-			RTN_Open(rtn);
-			string szRtn = RTN_Name(rtn);		
-			RTN_InsertCall(rtn,
-				IPOINT_BEFORE,
-				AFUNPTR(GetActiveRecord),							
-				IARG_CONTEXT,
-				IARG_END);	
+			ADDRINT addr;
+			string szAddr = szLine.substr(2);
+			stringstream ss(szAddr);
+			ss >> addr;
 			
-			map<string, ADDRINT>::iterator i2s_p = g_hFuncs.find(szRtn);
-			if( i2s_p != g_hFuncs.end() ) 
-			{				
-				//cerr << "Collect instruction address for " << hex << szRtn << endl;	
-				bool bLargeFunc = false;
-				// 1. track the change of stack frame by user functions, by searching "sub $24, esp"
-				for( INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins) )
-				{
-					//cout << hex << INS_Address(ins) << endl;	
-					bool bTrack = false;					
-					if( !bLargeFunc
-						&& INS_Opcode(ins) == XED_ICLASS_SUB &&
-						INS_OperandIsImmediate( ins, 1) &&
-						INS_OperandIsReg( ins ,0) && 
-						INS_OperandReg( ins, 0) == REG_STACK_PTR )
-					{				
-						// treat functions with stack less than 3x block size as small functions
-						UINT32 nOffset = (UINT32) INS_OperandImmediate(ins, 1);
-						//cerr << endl << "Offset:\t" << nOffset << endl;
-						if( nOffset >= KnobLineSize.Value() * 1 )
-						{
-							//g_largeFuncSet.insert(i2s_p->second);	
-							bLargeFunc = true;
-						}						
-					}
-		
-					// 2. track stack access by user functions
-					// instruction accesses memory relative to ESP or EBP, the latter may be used
-					// as a general register and thus mislead the judgement
-					if( bLargeFunc && INS_IsStackWrite(ins) )
-					{
-						bool bEsp = false;
-						ADDRINT disp = INS_MemoryDisplacement(ins);
-						if( INS_MemoryBaseReg(ins) == REG_STACK_PTR )
-							bEsp = true;
-						if(disp != 0 && bEsp)
-							bTrack = true;
-					}
-					
-							
-											
-					// track stack write access by ESP+0x23					
-					Instruction(ins, v);
-					if( bTrack )
-					{																			
-						OnStackWrite(ins, i2s_p->second);						
-					}		
-					else
-					{						
-						OnMemory(ins, v);
-					}
-				}
-			}
-			else
+			LoadInst(addr);			
+		}
+		else if( 'R' == szLine[0] || 'W' == szLine[0])
+		{
+			bool bRead = ('R' == szLine[0]);
+			// R:S:4200208:12:14073623860994
+			if( 'S' == szLine[2] )
 			{
-				for( INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins) )
-				{
-					Instruction(ins,v);
-					OnMemory(ins, v);
-				}
+				UINT32 index1 = szLine.find(':', 4);
+				string szStr = szLine.substr(4, index1-4);
+				stringstream ss1(szStr);
+				ADDRINT nFunc;
+				ss1 >> nFunc;
+				
+				
+				UINT32 index2 = szLine.find(':', index1+1);
+				szStr=szLine.substr(index1+1, index2-index1-1);
+				int disp;
+				stringstream ss2(szStr);
+				ss2 >> disp;
+				
+				szStr = szLine.substr(index2+1);
+				ADDRINT addr;
+				stringstream ss3(szStr);
+				ss3 >> addr;
+				
+				if( bRead)
+					LoadSingle(addr, 0);
+				else
+					OnStackWrite(nFunc, disp, addr, bRead);			
 			}
-			RTN_Close(rtn);
+			// W:G:6962120
+			else if( 'G' == szLine[2])
+			{
+				nArea = 1;
+				ADDRINT addr;
+				string szAddr = szLine.substr(4);
+				stringstream ss(szAddr);
+				ss >> addr;
+				if( bRead)
+					LoadSingle(addr, nArea);	
+				else
+					StoreSingle(addr, nArea);
+			}
+			else if( 'H' == szLine[2] )
+			{
+				nArea = 2;
+				ADDRINT addr;
+				string szAddr = szLine.substr(4);
+				stringstream ss(szAddr);
+				ss >> addr;
+				
+				if(bRead)
+					LoadSingle(addr, nArea);	
+				else
+					StoreSingle(addr, nArea);
+			}
+		}
+		else if( '#' == szLine[0])
+		{
+			stringstream ss(szLine.substr(1));
+			ss >> g_EndOfImage;
 		}
 	}	
 }
-
 /* ===================================================================== */
 
 VOID Fini(int code, VOID * v)
@@ -418,6 +324,9 @@ VOID Fini(int code, VOID * v)
 	Graph::DumpGraph(outf);
 	outf.close();
 }
+
+
+
 /* ===================================================================== */
 /* Main                                                                  */
 /* ===================================================================== */
@@ -456,7 +365,7 @@ int main(int argc, char *argv[])
 		cerr << "Failed to open " << KnobOutputFile.Value().c_str();
 	
 	// 1. Collect user functions from a external file
-	GetUserFunction();
+	//GetUserFunction();
 	// 2. Collect the start address of user functions
 	IMG_AddInstrumentFunction(Image, 0);
 	// 3. Collect dynamic stack base address when function-calling
