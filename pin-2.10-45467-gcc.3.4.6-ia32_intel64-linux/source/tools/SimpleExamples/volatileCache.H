@@ -17,7 +17,7 @@ ADDRINT g_TotalRefresh;
 ADDRINT g_EndOfImage;    // end of global area
 ADDRINT g_CurrentEsp;    // begin of stack area
 
-bool g_bEnableAll = false;
+bool g_bEnableAll = true;
 int opti_hardware = 0;
 
 namespace CACHE_SET
@@ -123,7 +123,7 @@ class Volatile_LRU_CACHE_SET
             // tighter assembly loop for ARM that way ...
             if(_tags[index] == tag && _bValid[index] )
 			{
-				nWriteBack += Validate(index, g_bEnableAll);
+				nWriteBack += InValidate(index, g_bEnableAll);
 				if( _bValid[index] )
 				{
 					lineIndex = index;
@@ -161,12 +161,12 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 		_bDirty[lineIndex] = true;
 }
 
-  int Replace(CACHE_TAG tag, bool bWrite )
+  int Replace(CACHE_TAG tag, bool bWrite, int nArea )
   {
 	  g_CurrentCycle += bWrite? _writePenalty: _readPenalty;
       UINT32 lineIndex = _tagsLRU.front();
 	  
-	  int nWriteBack = Validate(lineIndex, g_bEnableAll);
+	  int nWriteBack = InValidate(lineIndex, g_bEnableAll);
 		  
 	  if( _bValid[lineIndex])
 		Refresh(lineIndex, false);
@@ -174,17 +174,7 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 		_refreCount[lineIndex] = g_CurrentCycle;
 
     // stack, global, heap
-	ADDRINT nAddr = tag * g_BlockSize;
-	if( nAddr < g_EndOfImage)
-	{
-		_source[lineIndex] = 1;
-	}
-	else if( nAddr > g_CurrentEsp - 1048576)
-	{
-		_source[lineIndex] = 0;
-	}
-	else
-		_source[lineIndex] = 2;
+	_source[lineIndex] = nArea;
 	
       _tags[lineIndex] = tag;
       _tagsLRU.pop_front();
@@ -207,10 +197,10 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
       return 0;
   }
   
- int Validate(UINT32 index, bool bEnable)
+ int InValidate(UINT32 index, bool bEnable)
  {
-	 if( !bEnable )
-		 return 0;
+	 //if( !bEnable )
+	//	 return 0;
 	 int nWriteBack = 0;
 	 if( !_bValid[index] )
 		 return nWriteBack;
@@ -221,20 +211,22 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	 if( interval < RefreshCycle )
 		 return nWriteBack;
 	// below are dinishing blocks
-	if( !_bDirty[index])
+	// opti-1 invalidate non-dirty block
+	if( opti_hardware == 1 && !_bDirty[index])
 	{
 		_bValid[index] = false;		 
 		return nWriteBack;
 	}
-	if( opti_hardware == 1 )  
-		return nWriteBack;
+	
 	// below are dirty dinishing blocks	
 	// opti-2 write-back dirty block older than four-phase
-	if( interval >= RefreshCycle*4 )
+	// opti-2 invalildate 2-retention-time block
+	if( opti_hardware == 2 && interval >= RefreshCycle*2 )
 	{
 		 _bValid[index] = false;
-		 g_TotalRefresh += 4;
-		 nWriteBack = 1;
+		 g_TotalRefresh += 1;
+		 if( _bDirty[index])
+			nWriteBack = 1;
 	}
 	return nWriteBack;		 
  }
@@ -266,7 +258,7 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	ADDRINT nRefresh = interval/RefreshCycle;
 	g_TotalRefresh += nRefresh;
 	
-	// reset the counter
+	// reset the timestamps
 	_refreCount[index] = g_CurrentCycle;
 	
   }
@@ -282,7 +274,7 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	int nWriteback = 0;
 	for (INT32 index = _tagsLastIndex; index >= 0; index--)
 	{
-		nWriteback += Validate(index, true);
+		nWriteback += InValidate(index, true);
 		if( _bValid[index] )
 			Refresh(index, false);
 	}
