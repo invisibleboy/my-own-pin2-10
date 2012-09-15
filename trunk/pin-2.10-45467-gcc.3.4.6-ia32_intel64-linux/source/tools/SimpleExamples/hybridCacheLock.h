@@ -44,7 +44,8 @@ END_LEGAL */
 #define MEGA (KILO*KILO)
 #define GIGA (KILO*MEGA)
 
-
+#undef QALI_DEBUG
+//#define QALI_DEBUG
 
 #include <sstream>
 
@@ -55,11 +56,18 @@ END_LEGAL */
 
 #include "cacheL1.H"
 
+#undef CACHE_LINE_PROFLING
+
+
 extern unsigned int g_nHeapBegin;
 std::map<ADDRINT, CACHE_STATS> g_hShift;
 std::set<ADDRINT> g_TagSet[3];
+extern map<ADDRINT, set<int> > g_hFunc2Block;   // user functions, blocks to lock per function
+extern ADDRINT g_nCurFunc;
+extern map<ADDRINT, ADDRINT> g_hAddr2Ebp;		// user function's ebp
+extern map<ADDRINT, ADDRINT> g_hFuncProfiling;
 
-
+ADDRINT g_lockCounter = 0;
 
 namespace CACHE_SET
 {
@@ -170,8 +178,10 @@ public:
 
     UINT32 LoadSTT(CACHE_TAG tag, bool &bWriteBack, bool bData)
     {
+#ifdef CACHE_LINE_PROFLING
         if (bData)
             ++ g_hShift[tag];      // recording only data rather than instructions
+#endif
 
         // LRU, swap, valid, write back
 		UINT32 lineIndex = _tagsLRU.back();
@@ -198,7 +208,9 @@ public:
 
     void LoadSram(CACHE_TAG tag, bool &bWriteBack, bool &bMig)
     {
+#ifdef CACHE_LINE_PROFLING
         ++ g_hShift[tag];
+#endif
         // migrate, valid, passive migration
         if(_SttRecord[0].m_bDirty)
         {
@@ -227,8 +239,10 @@ public:
 
     void Swap(UINT32 sttIndex, UINT32 sramIndex = 0)
     {
+#ifdef CACHE_LINE_PROFLING
         ++ g_hShift[_tags[sttIndex] ];
         ++ g_hShift[_tags[0] ];
+#endif
 
         CACHE_TAG tag = _tags[sttIndex];
         bool bDirty = _SttRecord[sttIndex].m_bDirty;
@@ -471,27 +485,42 @@ bool HYBRID_CACHE<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr,
     bool bNeedLock = false;
 	
 	// test if this block should be locked
-	map<ADDRINT, set<int> >::iterator a2s_p = g_hFunc2Block.find(g_nCurFunc);
+	std::map<ADDRINT, std::set<int> >::iterator a2s_p = g_hFunc2Block.find(g_nCurFunc);
 	if( a2s_p != g_hFunc2Block.end() )
 	{
+		// 0. get current EBP
+		ADDRINT nEbp = g_hAddr2Ebp[g_nCurFunc];
 		// 1. get blockId
 		CACHE_TAG ebpTag;
 		UINT32 setIndexEbp;
-		SplitAddress(g_nCurFunc, ebpTag, setIndexEbp);
+		SplitAddress(nEbp, ebpTag, setIndexEbp);
 		int blockId = ebpTag - tag;
+#ifdef QALI_DEBUG
+	//	cerr << "//" << g_nCurFunc << ":\t" << ebpTag << "-" << tag << "=" << blockId << "----";
+#endif
 		// 2. test if it should be locked
-		set<int>::iterator s_p = a2s_p->second.find(blockId);
+		std::set<int>::iterator s_p = a2s_p->second.find(blockId);
 		if(s_p != a2s_p->second.end() )
 		{
+#ifdef QALI_DEBUG	
+			cerr << "<<" << g_nCurFunc << ":\t" << ebpTag << "-" << tag << "=" << blockId << "----";
+			cerr << "lock-" << ++g_lockCounter << endl;
+#endif
 			bNeedLock = true;
 		}
+#ifdef QALI_DEBUG
+		//else
+		//	cerr << "unlock" << endl;
+#endif
 	}	
 	
 
     LOCATION_TYPE locType = LocationType(addr, bUser);
 
+#ifdef CACHE_LINE_PROFLING
     if( bData)
         g_TagSet[locType].insert(tag);
+#endif
 
     UINT32 lineIndex = 0;
     bool hit = set.Find(tag, lineIndex);
@@ -810,7 +839,8 @@ string HYBRID_CACHE<SET,MAX_SETS,STORE_ALLOCATION>::StatsLong(string prefix, CAC
            + mydecstr(UnTotalWB, numberWidth) + ":  " +fltstr(100.0 * UnTotalWB/nTotalWB, 4, 8)
            + "%\n";
     out += "\n";
-
+	
+#ifdef CACHE_LINE_PROFLING
     out += "##############################cache line level statistics############################\n";
     headerWidth = 16;
 
@@ -850,6 +880,8 @@ string HYBRID_CACHE<SET,MAX_SETS,STORE_ALLOCATION>::StatsLong(string prefix, CAC
 
         }
     }
+#endif
+
     return out;
 }
 
