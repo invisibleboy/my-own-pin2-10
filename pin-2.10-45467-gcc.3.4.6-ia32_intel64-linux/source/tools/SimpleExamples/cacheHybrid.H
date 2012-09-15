@@ -55,7 +55,6 @@ END_LEGAL */
 
 #include "cacheL1.H"
 
-extern unsigned int g_nHeapBegin;
 std::map<ADDRINT, CACHE_STATS> g_hShift;
 std::set<ADDRINT> g_TagSet[3];
 
@@ -787,7 +786,9 @@ string HYBRID_CACHE<SET,MAX_SETS,STORE_ALLOCATION>::StatsLong(string prefix, CAC
            + mydecstr(UnTotalWB, numberWidth) + ":  " +fltstr(100.0 * UnTotalWB/nTotalWB, 4, 8)
            + "%\n";
     out += "\n";
-
+	
+#undef CACHE_LINE_PROFLING
+#ifdef CACHE_LINE_PROFLING
     out += "##############################cache line level statistics############################\n";
     headerWidth = 16;
 
@@ -827,6 +828,7 @@ string HYBRID_CACHE<SET,MAX_SETS,STORE_ALLOCATION>::StatsLong(string prefix, CAC
 
         }
     }
+#endif
     return out;
 }
 
