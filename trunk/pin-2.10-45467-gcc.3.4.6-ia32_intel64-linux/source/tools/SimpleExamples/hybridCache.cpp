@@ -45,6 +45,8 @@ END_LEGAL */
 #include <fstream>
 #include "cacheHybrid.H"
 
+#undef USER_PROFILE
+//#define USER_PROFILE
 
 /* ===================================================================== */
 /* Commandline Switches */
@@ -55,15 +57,16 @@ KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE,    "pintool",
 KNOB<UINT32> KnobCacheSize(KNOB_MODE_WRITEONCE, "pintool",
     "c","32", "cache size in kilobytes");
 KNOB<UINT32> KnobLineSize(KNOB_MODE_WRITEONCE, "pintool",
-    "b","16", "cache block size in bytes");
+    "b","32", "cache block size in bytes");
 KNOB<UINT32> KnobAssociativity(KNOB_MODE_WRITEONCE, "pintool",
     "a","4", "cache associativity (1 for direct mapped)");
 
 /* ===================================================================== */
 /* Global variables */
 /* ===================================================================== */
-UINT32 g_nHeapBegin = 0;
-
+#ifdef USER_PROFILE
+bool g_bStartSimu = false;	
+#endif
 /* ===================================================================== */
 /* Print Help Message                                                    */
 /* ===================================================================== */
@@ -89,11 +92,24 @@ namespace DL1
 
 DL1::CACHE* dl1 = NULL;
 
+#ifdef USER_PROFILE
+void SetSimu()
+{
+	g_bStartSimu = true;
+}
+void UnsetSimu()
+{
+	g_bStartSimu = false;
+}
+#endif
 /* ===================================================================== */
 
 VOID LoadMulti(ADDRINT addr, UINT32 size)
 {
     // first level D-cache
+#ifdef USER_PROFILE
+	if( g_bStartSimu)
+#endif
 	dl1->Access(addr, size, ACCESS_BASE::ACCESS_TYPE_LOAD, true, true );
 }
 
@@ -101,6 +117,9 @@ VOID LoadMulti(ADDRINT addr, UINT32 size)
 
 VOID StoreMulti(ADDRINT addr, UINT32 size)
 {
+#ifdef USER_PROFILE
+	if( g_bStartSimu)
+#endif
     dl1->Access(addr, size, ACCESS_BASE::ACCESS_TYPE_STORE, true, true );
 }
 
@@ -108,20 +127,48 @@ VOID StoreMulti(ADDRINT addr, UINT32 size)
 
 VOID LoadSingle(ADDRINT addr)
 {
+#ifdef USER_PROFILE
+	if( g_bStartSimu)
+#endif
     dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD, true, true );
 }
 /* ===================================================================== */
 
 VOID StoreSingle(ADDRINT addr)
 {
+#ifdef USER_PROFILE
+	if( g_bStartSimu)
+#endif
     dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE, true, true );
 }
 
 /* ===================================================================== */
-VOID Image(IMG img, void *v)
+/*VOID Image(IMG img, void *v)
 {
-	;
+	// control the simulation 
+	RTN rtn = RTN_FindByName(img, "main");
+	RTN_Open(rtn);
+	RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)SetSimu, IARG_END);
+	RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR)UnsetSimu, IARG_END);
+	RTN_Close(rtn);
+}*/
+
+
+VOID Routine(RTN rtn, void *v)
+{
+#ifdef USER_PROFILE	
+// control the simulation 
+	string szFunc = RTN_Name(rtn);
+	if(szFunc == "main")
+	{
+		RTN_Open(rtn);
+		RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)SetSimu, IARG_END);
+		RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR)UnsetSimu, IARG_END);
+		RTN_Close(rtn);	
+	}
+#endif
 }
+
 
 /* ===================================================================== */
 VOID Instruction(INS ins, void * v)
@@ -215,6 +262,9 @@ int main(int argc, char *argv[])
                          KnobAssociativity.Value());    
     
     INS_AddInstrumentFunction(Instruction, 0);
+#ifdef USER_PROFILE
+	RTN_AddInstrumentFunction(Routine, 0);
+#endif
 	//IMG_AddInstrumentFunction( Image, 0);
     PIN_AddFiniFunction(Fini, 0);
 

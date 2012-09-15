@@ -34,8 +34,7 @@ END_LEGAL */
 //
 
 /*! @file
- *  This file contains an ISA-portable cache simulator
- *  data cache hierarchies
+ *  This file computes the execution times for each user function.
  */
 
 
@@ -45,11 +44,7 @@ END_LEGAL */
 #include <fstream>
 #include <sstream>
 #include <map>
-#include "hybridCacheLock.h"
-
-#undef USER_PROFILE
-//#define USER_PROFILE
-
+using namespace std;
 
 
 /* ===================================================================== */
@@ -58,27 +53,21 @@ END_LEGAL */
 
 KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE,    "pintool",
     "o", "hybrid.out", "specify dcache file name");
-KNOB<UINT32> KnobCacheSize(KNOB_MODE_WRITEONCE, "pintool",
-    "c","32", "cache size in kilobytes");
-KNOB<UINT32> KnobLineSize(KNOB_MODE_WRITEONCE, "pintool",
-    "b","32", "cache block size in bytes");
-KNOB<UINT32> KnobAssociativity(KNOB_MODE_WRITEONCE, "pintool",
-    "a","4", "cache associativity (1 for direct mapped)");
 KNOB<string> KnobLockFile(KNOB_MODE_WRITEONCE, "pintool",
 	"lf", "lockfile", "lock file");
-KNOB<UINT32> KnobTopN(KNOB_MODE_WRITEONCE, "pintool",
-    "n","25", "top n value");
 
 /* ===================================================================== */
 /* Global variables */
 /* ===================================================================== */
 UINT32 g_nHeapBegin = 0;
 ADDRINT g_nCurFunc = 0;
-map<string, set<int> > g_UserfuncSet;
-map<ADDRINT, set<int> > g_hFunc2Block;   // user functions, blocks to lock per function
+map<string, map<int, double> > g_UserfuncSet;
+map<ADDRINT, int> g_FuncFreq;
+//map<ADDRINT, set<int> > g_hFunc2Block;   // user functions, blocks to lock per function
 map<ADDRINT, string> g_hAddr2Func;	// user function, start address to function
 //map<ADDRINT, string> g_hFunc2Addr;
-map<ADDRINT, ADDRINT> g_hAddr2Ebp;		// user function's ebp
+ADDRINT g_TotalInsts = 0;		// user function's ebp
+ADDRINT g_MultiInsts = 0;
 #ifdef USER_PROFILE
 bool g_bStartSimu = false;	
 #endif
@@ -96,16 +85,6 @@ INT32 Usage()
     return -1;
 }
 
-namespace DL1
-{
-    const UINT32 max_sets = 16 * KILO; // cacheSize / (lineSize * associativity);
-    const UINT32 max_associativity = 16; // associativity;
-    const CACHE_ALLOC::STORE_ALLOCATION allocation = CACHE_ALLOC::STORE_ALLOCATE;
-	
-	typedef HYBRID_CACHE<CACHE_SET::HYBRID_LRU_SET<max_associativity>, max_sets, allocation> CACHE;
-}
-
-DL1::CACHE* dl1 = NULL;
 
 /* ===================================================================== */
 /* Helper functions                                                    */
@@ -125,7 +104,7 @@ void UnsetSimu()
 void GetUserFunc()
 {
 	std::ifstream inf;
-	double topN = (double)KnobTopN.Value();
+	double topN = 10;
 	inf.open(KnobLockFile.Value().c_str());
 	std::string szLine;
 	std::string szFunc;
@@ -153,64 +132,28 @@ void GetUserFunc()
 			
 			if( dFreq < topN )
 				continue;
-			g_UserfuncSet[szFunc].insert(nBlockID);
+			g_UserfuncSet[szFunc][nBlockID] = dFreq;
 #ifdef QALI_DEBUG
-			cerr << "--" << szFunc << ": " << nBlockID << endl;
+			cerr << "--" << szFunc << "--" << nBlockID  << ":" << dFreq << endl;
 #endif
 		}
 	}
 	inf.close();
 }
 
-/* ===================================================================== */
-
-/*======================================================================*/
-VOID LoadMulti(ADDRINT addr, UINT32 size)
+VOID Count(ADDRINT nAddr)
 {
-    // first level D-cache
-#ifdef USER_PROFILE
-	if( g_bStartSimu)
-#endif
-	dl1->Access(addr, size, ACCESS_BASE::ACCESS_TYPE_LOAD, true, true );
+	++ g_FuncFreq[nAddr];
 }
 
-/* ===================================================================== */
-
-VOID StoreMulti(ADDRINT addr, UINT32 size)
+VOID IncInst()
 {
-#ifdef USER_PROFILE
-	if( g_bStartSimu)
-#endif
-    dl1->Access(addr, size, ACCESS_BASE::ACCESS_TYPE_STORE, true, true );
+	++ g_TotalInsts;
 }
 
-/* ===================================================================== */
-
-VOID LoadSingle(ADDRINT addr)
+VOID IncMultiInst()
 {
-#ifdef USER_PROFILE
-	if( g_bStartSimu)
-#endif
-    dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD, true, true );
-}
-/* ===================================================================== */
-
-VOID StoreSingle(ADDRINT addr)
-{
-#ifdef USER_PROFILE
-	if( g_bStartSimu)
-#endif
-    dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE, true, true );
-}
-
-
-VOID SetEbp(ADDRINT nAddr, CONTEXT *ctxt)
-{
-	ADDRINT nEsp = PIN_GetContextReg(ctxt, REG_STACK_PTR);
-	g_hAddr2Ebp[nAddr] = nEsp + 4;
-#ifdef QALI_DEBUG
-	cerr << "==Ebp for " << hex << nAddr << "[" << g_hAddr2Func[nAddr] << "]:\t" << nEsp+4 << endl;
-#endif
+	++ g_MultiInsts;
 }
 /* ===================================================================== */
 // get start address of each user function
@@ -233,26 +176,14 @@ VOID Image(IMG img, void *v)
 
 VOID Routine(RTN rtn, void *v)
 {
-#ifdef USER_PROFILE
-	// control the simulation 
-/*	string szFunc = RTN_Name(rtn);
-	if(szFunc == "main")
-	{
-		RTN_Open(rtn);
-		RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)SetSimu, IARG_END);
-		RTN_InsertCall(rtn, IPOINT_AFTER, (AFUNPTR)UnsetSimu, IARG_END);
-		RTN_Close(rtn);	
-	}*/
-#endif	
-	
 	const string &szName = RTN_Name(rtn); 
-	map<string, set<int> >::iterator s2s_p = g_UserfuncSet.find(szName);
+	map<string, map<int, double> >::iterator s2s_p = g_UserfuncSet.find(szName);
 	if( s2s_p != g_UserfuncSet.end())	{
 		
 		// get name to address
-		ADDRINT nAddr = RTN_Address(rtn);
-		g_hFunc2Block[nAddr].insert(s2s_p->second.begin(), s2s_p->second.end());
+		ADDRINT nAddr = RTN_Address(rtn);		
 		g_hAddr2Func[nAddr] = s2s_p->first;
+		g_FuncFreq[nAddr] = 0;
 #ifdef QALI_DEBUG
 		cerr << "++++" << s2s_p->first << ":\t" <<hex << nAddr << dec << endl;
 #endif
@@ -260,66 +191,42 @@ VOID Routine(RTN rtn, void *v)
 		// add instrumentation code for ebp
 		RTN_Open(rtn);
 		RTN_InsertCall( 
-			rtn, IPOINT_BEFORE, (AFUNPTR)SetEbp,
+			rtn, IPOINT_BEFORE, (AFUNPTR)Count,
 			IARG_ADDRINT, nAddr,
 			IARG_CONTEXT, IARG_END);
 		RTN_Close(rtn);
 	}		
 }
 
-/* ===================================================================== */
-VOID Instruction(INS ins, void * v)
-{			
-			
-    if (INS_IsMemoryRead(ins))
+VOID Instruction(INS ins, VOID *v)
+{
+	INS_InsertPredicatedCall(
+				ins, IPOINT_BEFORE, (AFUNPTR) IncInst,				
+				IARG_END);
+				
+	int single1 = 0, single2 = 0;
+	if (INS_IsMemoryRead(ins))
     {
         // map sparse INS addresses to dense IDs
         const UINT32 size = INS_MemoryReadSize(ins);
-        const BOOL   single = (size <= 4);
-		RTN rtn = INS_Rtn(ins);
-		g_nCurFunc = RTN_Address(rtn);		
-                
-		if( single )
-		{
-			INS_InsertPredicatedCall(
-				ins, IPOINT_BEFORE, (AFUNPTR) LoadSingle,
-				IARG_MEMORYREAD_EA,
-				IARG_END);
-		}
-		else
-		{
-			INS_InsertPredicatedCall(
-				ins, IPOINT_BEFORE,  (AFUNPTR) LoadMulti,
-				IARG_MEMORYREAD_EA,
-				IARG_MEMORYREAD_SIZE,
-				IARG_END);
-		}
+        single1 = (size <= 4);		
     }
         
     if ( INS_IsMemoryWrite(ins) )
     {
         // map sparse INS addresses to dense IDs            
         const UINT32 size = INS_MemoryWriteSize(ins);
-        const BOOL   single = (size <= 4);
-		RTN rtn = INS_Rtn(ins);
-		g_nCurFunc = RTN_Address(rtn);
-		if( single )
-		{
-			INS_InsertPredicatedCall(
-				ins, IPOINT_BEFORE,  (AFUNPTR) StoreSingle,
-				IARG_MEMORYWRITE_EA,
-				IARG_END);
-		}
-		else
-		{
-			INS_InsertPredicatedCall(
-				ins, IPOINT_BEFORE,  (AFUNPTR) StoreMulti,
-				IARG_MEMORYWRITE_EA,
-				IARG_MEMORYWRITE_SIZE,
-				IARG_END);
-		}
+        single2 = (size <= 4);		
+			
     }
+	
+	if( single1 || single2)
+			INS_InsertPredicatedCall(
+				ins, IPOINT_BEFORE, (AFUNPTR) IncMultiInst,				
+				IARG_END);
 }
+
+/* ===================================================================== */
 
 /* ===================================================================== */
 
@@ -335,11 +242,41 @@ VOID Fini(int code, VOID * v)
             
     out <<
         "#\n"
-        "# DCACHE stats\n"
+        "# Function Execution Stats\n"
         "#\n";    
     
-	out << dl1->Dump("#", CACHE_BASE::CACHE_TYPE_DCACHE);
+	// handle with different N
+	int arrN[] = {10,25, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000};
+	for( int i = 0; i < 9; ++ i)
+	{
+		int N = arrN[i];
+		
+		
+		out << N << ":\t";
+		int dFreq = 0;
+		int dFreq2 = 0;
+		std::map<ADDRINT, int>::iterator i2i_p = g_FuncFreq.begin(), i2i_e = g_FuncFreq.end();
+		for(; i2i_p != i2i_e; ++ i2i_p)
+		{
+			std::string szFunc = g_hAddr2Func[i2i_p->first];
+			
+			cerr << szFunc << ":\t" << i2i_p->second << endl;
+			
+			std::map<int, double>::iterator i2d_p = g_UserfuncSet[szFunc].begin(), i2d_e = g_UserfuncSet[szFunc].end();
+			for( ; i2d_p != i2d_e; ++ i2d_p)
+			{
+				if( i2d_p->second < N )
+					continue;
+				++ dFreq;
+				dFreq2 += i2i_p->second;
+			}
+		}
+		
+		out << dFreq << "/" << dFreq2 << endl;
+	}
 	
+	out << "Total Insts:\t" << g_TotalInsts << endl;
+	out << "Multi Insts:\t" << g_MultiInsts << endl;
       
     out.close();
 }
@@ -357,10 +294,7 @@ int main(int argc, char *argv[])
         return Usage();
     }
 
-    dl1 = new DL1::CACHE("L1 Data Cache", 
-                         KnobCacheSize.Value() * KILO,
-                         KnobLineSize.Value(),
-                         KnobAssociativity.Value());    
+   
     GetUserFunc();
 	//IMG_AddInstrumentFunction( Image, 0);
 	RTN_AddInstrumentFunction(Routine, 0);
@@ -374,7 +308,6 @@ int main(int argc, char *argv[])
 
     PIN_StartProgram();
 	
-	delete dl1;
     
     return 0;
 }
