@@ -67,7 +67,7 @@ bool g_bStartSimu = false;
 
 //typedef ADDRINT UINT64;
 
-ADDRINT g_nTotalWrite = 0;
+ADDRINT g_nTotalDist = 0;
 std::map<ADDRINT, UINT64> g_hRecorder;
 std::map<UINT32, UINT64> g_hDist;
 /* ===================================================================== */
@@ -191,7 +191,7 @@ VOID Fini(int code, VOID * v)
 	{
 		UINT32 freqInterval = OrderNum(I->second); 
 		++ g_hDist[freqInterval];
-		++ g_nTotalWrite;
+		++ g_nTotalDist;
 	}
 	
 	
@@ -212,7 +212,7 @@ VOID Fini(int code, VOID * v)
 	std::map<UINT32, UINT64>::iterator J = g_hDist.begin(), JE = g_hDist.end();
 	for(; J != JE; ++ J)
 	{
-		out << J->first << ":\t" << J->second << ":\t" << J->second/(double)g_nTotalWrite << "\n";
+		out << J->first << ":\t" << J->second << ":\t" << J->second/(double)g_nTotalDist << "\n";
 	}
 	
       

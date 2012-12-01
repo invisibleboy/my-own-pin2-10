@@ -65,8 +65,24 @@ KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE,    "pintool",
 bool g_bStartSimu = false;	
 #endif
 
+const UINT32 T_fastW = 3;
+const UINT32 T_slowW = 10;
+const double E_fastW = 0.7;
+const double E_slowW = 1;
+const UINT64 R_fastW = 1800000L;
+const UINT64 R_slowW = 11158000000L;
 //typedef UINT64 ADDRINT;
 
+ADDRINT g_nTotalWriteZero = 0;
+ADDRINT g_nTotalWriteL = 0;
+ADDRINT g_nTotalWrite = 0;
+ADDRINT g_nTotalRead = 0;
+ADDRINT g_nTotalInst = 0;
+ADDRINT g_nTotalLong = 0;
+
+map<ADDRINT, UINT64> g_hWriteInstL;
+
+ADDRINT g_nTotalFastRef = 0;
 std::map<ADDRINT, UINT64> g_hLastW;
 std::map<ADDRINT, UINT64> g_hLastR;
 ADDRINT g_nClock = 0;
@@ -101,7 +117,7 @@ void UnsetSimu()
 
 UINT32 OrderNum(ADDRINT interval)
 {
-	UINT32 order = -1;
+	UINT32 order = 0;
 	do
 	{
 		interval = interval >> 2;   // 4^
@@ -113,6 +129,9 @@ UINT32 OrderNum(ADDRINT interval)
 
 VOID LoadMulti(ADDRINT addr, UINT32 size)
 {
+	
+	size = size/4;
+	g_nTotalRead += size;
 	addr = addr & 0xfffffffffffffffc;
 	//cerr << "L: " << addr << "-" << g_nClock << endl;
     // first level D-cache
@@ -120,38 +139,60 @@ VOID LoadMulti(ADDRINT addr, UINT32 size)
 	if( g_bStartSimu)
 #endif
 	for(UINT32 i = 0; i < size; ++ i)
-		g_hLastR[addr+ i*4] = g_nClock;
-	++ g_nClock;
+	{
+		++ g_nClock;
+		g_hLastR[addr+ i*4] = g_nClock;		
+	}
+	
 }
 
 /* ===================================================================== */
 
-VOID StoreMulti(ADDRINT addr, UINT32 size)
+VOID StoreMulti(ADDRINT iAddr, ADDRINT addr, UINT32 size)
 {
+	size = size/4;
+	g_nTotalWrite += size;
 	addr = addr & 0xfffffffffffffffc;
 #ifdef USER_PROFILE
 	if( g_bStartSimu)
 #endif
+	
+	if( g_hWriteInstL.find(iAddr) != g_hWriteInstL.end() )
+		++ g_hWriteInstL[iAddr];
+
     for( UINT32 i = 0; i < size; ++ i)
 	{
+		g_nClock += T_fastW;
 		ADDRINT addr1 = addr + (i << 2);
 		//cerr << "S: " << addr1 << "-" << g_nClock << endl;
 		std::map<ADDRINT, UINT64>::iterator R = g_hLastR.find(addr1);
 		std::map<ADDRINT, UINT64>::iterator W = g_hLastW.find(addr1);
 		if( R != g_hLastR.end() && W != g_hLastW.end() )
 		{
-			UINT64 interval = R->second - W->second;
+			INT64 interval = R->second - W->second;
 			
 			if( interval > 0)
 			{
 				++ g_nTotalInterval;
 				UINT32 order = OrderNum(interval);
 				++ g_hInterval[order];
+			
+				if( ((UINT64)interval) >= R_fastW )
+				{
+					++ g_nTotalWriteL;
+					++ g_hWriteInstL[iAddr];
+				}
 			}
 		}
+		// write without reading it, counted as zero-life-time
+		else if ( W != g_hLastW.end() )
+		{
+			++ g_nTotalInterval;
+			++ g_hInterval[0];
+		}
+	
 		// update the write-mark
 		g_hLastW[addr1] = g_nClock;
-		++ g_nClock;
 	}
 }
 
@@ -159,42 +200,67 @@ VOID StoreMulti(ADDRINT addr, UINT32 size)
 
 VOID LoadSingle(ADDRINT addr)
 {
+	++ g_nTotalRead;
 	addr = addr & 0xfffffffffffffffc;
 	//cerr << "L: " << addr << "-" << g_nClock << endl;
 	
 #ifdef USER_PROFILE
 	if( g_bStartSimu)
 #endif
-    g_hLastR[addr] = g_nClock;
 	++ g_nClock;
-	
+    g_hLastR[addr] = g_nClock;
 }
 /* ===================================================================== */
 
-VOID StoreSingle(ADDRINT addr)
+VOID StoreSingle(ADDRINT iAddr, ADDRINT addr)
 {	
+	++ g_nTotalWrite;
+	g_nClock += T_fastW;
 	addr = addr & 0xfffffffffffffffc;
+	
+	if( g_hWriteInstL.find(iAddr) != g_hWriteInstL.end() )
+		++ g_hWriteInstL[iAddr];
+		
 	//cerr << "S: " << addr << "-" << g_nClock << endl;
 	ADDRINT addr1 = addr;
 	std::map<ADDRINT, UINT64>::iterator R = g_hLastR.find(addr1);
 	std::map<ADDRINT, UINT64>::iterator W = g_hLastW.find(addr1);
+	
+	// readTime - writeTime
 	if( R != g_hLastR.end() && W != g_hLastW.end() )
 	{
-		UINT64 interval = R->second - W->second;
+		INT64 interval = R->second - W->second;
 		
 	//	cerr << "interval = " << interval << endl;
 		if( interval > 0)
 		{
 			++ g_nTotalInterval;
-			UINT32 order = OrderNum(interval);
+			UINT32 order = OrderNum(interval);			
 			++ g_hInterval[order];
+			
+			if( ((UINT64)interval) >= R_fastW )
+			{
+				++ g_nTotalWriteL;
+				++ g_hWriteInstL[iAddr];
+			}
 		}
+	}
+	// write without reading it, counted as zero-life-time
+	else if ( W != g_hLastW.end() )
+	{
+		++ g_nTotalInterval;
+		++ g_hInterval[0];
 	}
 	// update the write-mark
 	g_hLastW[addr1] = g_nClock;
-	++ g_nClock;
+	
 }
 
+VOID ExecInst()
+{
+	++ g_nTotalInst;
+	++ g_nClock;
+}
 /* ===================================================================== */
 /*VOID Image(IMG img, void *v)
 {
@@ -226,6 +292,10 @@ VOID Routine(RTN rtn, void *v)
 /* ===================================================================== */
 VOID Instruction(INS ins, void * v)
 {
+	INS_InsertPredicatedCall(
+		ins, IPOINT_BEFORE, (AFUNPTR) ExecInst,
+		IARG_END);
+		
     if (INS_IsMemoryRead(ins))
     {
         // map sparse INS addresses to dense IDs
@@ -236,6 +306,7 @@ VOID Instruction(INS ins, void * v)
 		{
 			INS_InsertPredicatedCall(
 				ins, IPOINT_BEFORE, (AFUNPTR) LoadSingle,
+				//IARG_INST_PTR,
 				IARG_MEMORYREAD_EA,
 				IARG_END);
 		}
@@ -243,6 +314,7 @@ VOID Instruction(INS ins, void * v)
 		{
 			INS_InsertPredicatedCall(
 				ins, IPOINT_BEFORE,  (AFUNPTR) LoadMulti,
+				//IARG_INST_PTR,
 				IARG_MEMORYREAD_EA,
 				IARG_MEMORYREAD_SIZE,
 				IARG_END);
@@ -259,6 +331,7 @@ VOID Instruction(INS ins, void * v)
 		{
 			INS_InsertPredicatedCall(
 				ins, IPOINT_BEFORE,  (AFUNPTR) StoreSingle,
+				IARG_INST_PTR,
 				IARG_MEMORYWRITE_EA,
 				IARG_END);
 		}
@@ -266,6 +339,7 @@ VOID Instruction(INS ins, void * v)
 		{
 			INS_InsertPredicatedCall(
 				ins, IPOINT_BEFORE,  (AFUNPTR) StoreMulti,
+				IARG_INST_PTR,
 				IARG_MEMORYWRITE_EA,
 				IARG_MEMORYWRITE_SIZE,
 				IARG_END);
@@ -297,6 +371,11 @@ VOID Fini(int code, VOID * v)
 		out << I->first << ":\t" << I->second << ":\t" << I->second/(double)g_nTotalInterval << "\n";
 	}
 	
+	out << "###" << endl;
+	out << "TotalWrite:\t" << g_nTotalWrite << endl;
+	out << "TotalWriteLong:\t" << g_nTotalWriteL << endl;
+	out << "TotalWriteZero:\t" << g_hInterval[0] << endl;
+	out << "TotalCycles:" << ":\t" << g_nClock << "\n";
       
     out.close();
 }
