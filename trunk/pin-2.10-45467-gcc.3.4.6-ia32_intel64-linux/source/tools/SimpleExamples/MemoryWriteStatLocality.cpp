@@ -35,6 +35,11 @@ END_LEGAL */
 
 /*! @file
  *  This file is for the volatile PCM experimental evaluation.
+ *  This file is for evaluating the locality of write-mode preference:
+ *  ie. do instructions close to each other prefer the same write-mode?
+ */
+ /*! @file
+ *  This file is for the volatile PCM experimental evaluation.
  *  This file involves two-fold use: the first-time and second-time use.
  *  The first-time is to collect the raw data, as well as the the instruction addresses which involving long life time.
  *  The second-time is to collect the execution count of each long-term instruction, for overhead evaluation.
@@ -87,9 +92,10 @@ ADDRINT g_nTotalLong = 0;
 
 
 map<ADDRINT, UINT64> g_hWriteInstL;
-
+map<ADDRINT, bool> g_hWriteInstIsL;
 ADDRINT g_nTotalFastRef = 0;
 std::map<ADDRINT, UINT64> g_hLastW;
+std::map<ADDRINT, ADDRINT> g_hMem2InstW;
 std::map<ADDRINT, UINT64> g_hLastR;
 ADDRINT g_nClock = 0;
 ADDRINT g_nTotalInterval = 0;
@@ -121,12 +127,12 @@ void UnsetSimu()
 }
 #endif
 
-UINT32 OrderNum(ADDRINT interval)
+UINT32 OrderNum(ADDRINT interval, UINT32 granu)
 {
 	UINT32 order = 0;
 	do
 	{
-		interval = interval >> 2;   // 4^
+		interval = interval >> granu;   // 4^
 		++ order;
 	}while( interval > 0);
 	return order;
@@ -166,36 +172,48 @@ VOID StoreMulti(ADDRINT iAddr, ADDRINT addr, UINT32 size)
 
 
     for( UINT32 i = 0; i < size; ++ i)
-	{
-		if( g_hWriteInstL.find(iAddr) != g_hWriteInstL.end() )
-			++ g_hWriteInstL[iAddr];
+	{		
 		g_nClock += T_fastW;
 		ADDRINT addr1 = addr + (i << 2);
+		
+		std::map<ADDRINT, ADDRINT>::iterator flagP = g_hMem2InstW.find(addr1);
+		if( flagP == g_hMem2InstW.end() )    // if no previous write, update write-mark and skip it
+		{
+			// update the write-mark
+			g_hLastW[addr1] = g_nClock;
+			g_hMem2InstW[addr1] = iAddr;
+			return;
+		}
+		ADDRINT lastIaddrW = flagP->second;
+	
+		if( g_hWriteInstL.find(lastIaddrW) != g_hWriteInstL.end() )
+			++ g_hWriteInstL[lastIaddrW];
 		//cerr << "S: " << addr1 << "-" << g_nClock << endl;
 		std::map<ADDRINT, UINT64>::iterator R = g_hLastR.find(addr1);
 		std::map<ADDRINT, UINT64>::iterator W = g_hLastW.find(addr1);
-		if( R != g_hLastR.end() && W != g_hLastW.end() )
+		if( R != g_hLastR.end()  )
 		{
 			INT64 interval = R->second - W->second;
 			
 			if( interval > 0)
 			{
 				++ g_nTotalInterval;
-				UINT32 order = OrderNum(interval);
+				UINT32 order = OrderNum(interval,2);
 				++ g_hInterval[order];
 			
 				if( ((UINT64)interval) >= R_fastW )
 				{
-					++ g_nTotalWriteL;
-#ifndef SECOND_TIME
-					if( g_hWriteInstL.find(iAddr) == g_hWriteInstL.end() )
-						++ g_hWriteInstL[iAddr];
-#endif
+					++ g_nTotalWriteL;				
+					
+					if( g_hWriteInstL.find(lastIaddrW) == g_hWriteInstL.end() )
+						g_hWriteInstL[lastIaddrW] = 1;				
+					if(g_hWriteInstIsL[lastIaddrW] == false)
+						g_hWriteInstIsL[lastIaddrW] = true;
 				}
 			}
 		}
 		// write without reading it, counted as zero-life-time
-		else if ( W != g_hLastW.end() )
+		else
 		{
 			++ g_nTotalInterval;
 			++ g_hInterval[0];
@@ -203,6 +221,7 @@ VOID StoreMulti(ADDRINT iAddr, ADDRINT addr, UINT32 size)
 	
 		// update the write-mark
 		g_hLastW[addr1] = g_nClock;
+		g_hMem2InstW[addr1] = iAddr;
 	}
 }
 
@@ -226,18 +245,28 @@ VOID StoreSingle(ADDRINT iAddr, ADDRINT addr)
 {	
 	++ g_nTotalWrite;
 	g_nClock += T_fastW;
-	addr = addr & 0xfffffffffffffffc;
+	ADDRINT addr1 = addr & 0xfffffffffffffffc;	
+					
 	
-	if( g_hWriteInstL.find(iAddr) != g_hWriteInstL.end() )
-		++ g_hWriteInstL[iAddr];
-		
 	//cerr << "S: " << addr << "-" << g_nClock << endl;
-	ADDRINT addr1 = addr;
+	std::map<ADDRINT, ADDRINT>::iterator flagP = g_hMem2InstW.find(addr1);
+	if( flagP == g_hMem2InstW.end() )    // if no previous write, update write-mark and skip it
+	{
+		// update the write-mark
+		g_hLastW[addr1] = g_nClock;
+		g_hMem2InstW[addr1] = iAddr;
+		return;
+	}
+	ADDRINT lastIaddrW = flagP->second;
+	
+	if( g_hWriteInstL.find(lastIaddrW) != g_hWriteInstL.end() )
+		++ g_hWriteInstL[lastIaddrW];
+	
 	std::map<ADDRINT, UINT64>::iterator R = g_hLastR.find(addr1);
 	std::map<ADDRINT, UINT64>::iterator W = g_hLastW.find(addr1);
 	
 	// readTime - writeTime
-	if( R != g_hLastR.end() && W != g_hLastW.end() )
+	if( R != g_hLastR.end() )
 	{
 		INT64 interval = R->second - W->second;
 		
@@ -245,27 +274,29 @@ VOID StoreSingle(ADDRINT iAddr, ADDRINT addr)
 		if( interval > 0)
 		{
 			++ g_nTotalInterval;
-			UINT32 order = OrderNum(interval);			
+			UINT32 order = OrderNum(interval, 2);			
 			++ g_hInterval[order];
 			
 			if( ((UINT64)interval) >= R_fastW )
 			{
-				++ g_nTotalWriteL;
-#ifndef SECOND_TIME
-				if( g_hWriteInstL.find(iAddr) == g_hWriteInstL.end() )
-					g_hWriteInstL[iAddr] = 1;
-#endif
+				++ g_nTotalWriteL;				
+				
+				if( g_hWriteInstL.find(lastIaddrW) == g_hWriteInstL.end() )
+					g_hWriteInstL[lastIaddrW] = 1;				
+				if(g_hWriteInstIsL[lastIaddrW] == false)
+					g_hWriteInstIsL[lastIaddrW] = true;
 			}
 		}
 	}
 	// write without reading it, counted as zero-life-time
-	else if ( W != g_hLastW.end() )
+	else 
 	{
 		++ g_nTotalInterval;
 		++ g_hInterval[0];
 	}
 	// update the write-mark
 	g_hLastW[addr1] = g_nClock;
+	g_hMem2InstW[addr1] = iAddr;
 	
 }
 
@@ -349,6 +380,7 @@ VOID Instruction(INS ins, void * v)
         const BOOL   single = (size <= 4);
 		if( single )
 		{
+			g_hWriteInstIsL[iaddr] = false;
 			INS_InsertPredicatedCall(
 				ins, IPOINT_BEFORE,  (AFUNPTR) StoreSingle,
 				//IARG_INST_PTR,
@@ -358,6 +390,11 @@ VOID Instruction(INS ins, void * v)
 		}
 		else
 		{
+			 for( UINT32 i = 0; i < size; ++ i)
+			{	
+				ADDRINT addr1 = iaddr + (i << 2);
+				g_hWriteInstIsL[addr1] = false;
+			}
 			INS_InsertPredicatedCall(
 				ins, IPOINT_BEFORE,  (AFUNPTR) StoreMulti,
 				//IARG_INST_PTR,
@@ -418,6 +455,41 @@ VOID Fini(int code, VOID * v)
 	out << "TotalWriteZero:\t" << g_hInterval[0] << endl;
 	out << "TotalCycles:\t" << g_nClock << "\n";
       
+	  
+	// output localty info
+	// 1). storing it into histogram
+	std::map<UINT32, UINT32> hInterval;
+	UINT count = 0;
+	UINT countL = 0;
+	std::map<ADDRINT, bool>::iterator K1 = g_hWriteInstIsL.begin(), K1E = g_hWriteInstIsL.end();
+	for(; K1 != K1E; ++ K1)
+	{
+		//cerr << hex << K1->first << ":" << dec << K1->second ;
+		if( !K1->second )
+		{
+			++ count;
+		}
+		else
+		{
+			++ countL;
+			if( count != 0)
+			{
+				//cerr << "===" << count << endl;
+				UINT32 order = OrderNum(count, 1);
+				++ hInterval[order];				 
+			}
+			count = 0;
+		}
+		//cerr << endl;
+	}
+	
+	// 2). dump locality info
+	out << "#######localty info, total write insts: " << countL << " / " << g_hWriteInstIsL.size() << " ##########" << endl;
+	std::map<UINT32, UINT32>::iterator K = hInterval.begin(), KE = hInterval.end();
+	for(; K != KE; ++ K)
+	{
+		out << K->first << ":\t" << K->second << endl;
+	}
     out.close();
 	
 	std::ofstream out1("longWrite.txt");
@@ -426,6 +498,12 @@ VOID Fini(int code, VOID * v)
 	{
 		out1 << J->first << "\t" << J->second << endl;
 	}
+	
+	
+	
+	
+	
+	
 	out1.close();
 }
 
