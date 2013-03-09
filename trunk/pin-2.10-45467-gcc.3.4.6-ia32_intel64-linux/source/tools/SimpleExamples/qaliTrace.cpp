@@ -23,10 +23,8 @@ using namespace std;
 /* Commandline Switches */
 /* ===================================================================== */
 
-KNOB<string> KnobTraceFile(KNOB_MODE_WRITEONCE,    "pintool",
-    "ot", "trace", "specify the output trace file");
 KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE,    "pintool",
-    "o", "stats", "specify the output stats file");
+    "o", "trace", "specify the output trace file");
 KNOB<UINT32> KnobCacheSize(KNOB_MODE_WRITEONCE, "pintool",
     "c","32", "cache size in kilobytes");
 KNOB<UINT32> KnobLineSize(KNOB_MODE_WRITEONCE, "pintool",
@@ -320,12 +318,8 @@ int main(int argc, char *argv[])
         return Usage();
     }    	
     
-	g_traceFile.open(KnobTraceFile.Value().c_str() );
-	g_outputFile.open(KnobOutputFile.Value().c_str() );
-	
+	g_traceFile.open(KnobOutputFile.Value().c_str() );
 	if(!g_traceFile.good())
-		cerr << "Failed to open " << KnobTraceFile.Value().c_str();
-	if(!g_outputFile.good())
 		cerr << "Failed to open " << KnobOutputFile.Value().c_str();
 	
 	// 1. Collect user functions from a external file
