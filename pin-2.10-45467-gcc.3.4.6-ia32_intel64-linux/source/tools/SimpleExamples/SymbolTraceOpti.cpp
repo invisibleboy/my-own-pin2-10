@@ -2,6 +2,10 @@
  * This file is for generating the symbolized memory trace (currently only collecting local symbols)
  * 1. collect the user functions, and each user function's instruction-start and instruction-end addresses
  * 2. for each user instruction, compare the operand's address with the function's stack base address
+ * 
+ * input:
+ * 1) the trace which distinguishes between instructions, stack/global/heap read/write
+ * 2) the allocation results
  */
 
 #include "pin.H"
@@ -212,7 +216,11 @@ VOID OnStackAccess( ADDRINT nFunc, int oriDisp, ADDRINT oriAddr, bool bRead)
 		(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE, 0);	
 }
 /* ===================================================================== */
-/* get user functions' instruction-start and instruction-end addresses                                                                 */
+/* get user functions' instruction-start and instruction-end addresses   
+ * trace format:
+ * 'I:addr': instruction execution on addr
+ * 'R:S:4200208:12:14073623860994': memory read on the stack of function-ptr (4200408) with offset (12) and address (140...)
+ * 'W:addr': memory read on addr
 /* ===================================================================== */
 VOID Image(IMG img, VOID *v)
 {
@@ -317,6 +325,7 @@ VOID Fini(int code, VOID * v)
 	outf.close();
 }
 
+// read the allolcation results
 void ReadMap(ifstream &inf)
 {
 	int nFunc;
@@ -333,6 +342,7 @@ void ReadMap(ifstream &inf)
 			ss >> nFunc;
 			continue;
 		}
+		// read the representation data objects of a memory block
 		UINT32 index = szLine.find(":");
 		if( index != 0xffffffff )
 		{
@@ -342,6 +352,7 @@ void ReadMap(ifstream &inf)
 			//continue;
 		}
 		
+		// read the other data objects of a memory block
 		while( (index=szLine.find(";") ) != 0xffffffff)
 		{
 			string szObj = szLine.substr(0,index);

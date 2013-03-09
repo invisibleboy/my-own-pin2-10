@@ -92,20 +92,20 @@ ADDRINT g_testCounter = 0;
 // trace output
 namespace Graph
 {
-	struct Object
+	struct Object        // store the trace for stack area
 	{
 		int _object;
 		ADDRINT _cycle;
 	};
-	struct Global
+	struct Global		// store the trace for global area
 	{
 		ADDRINT _addr;
 		ADDRINT _cycle;
 	};
 	list<Global> g_gTrace;
 	map<ADDRINT, map<ADDRINT, ADDRINT> > g_gGraph;
-	map<UINT32, list<Object> > g_trace;       // function->object->cycle
-	map<UINT32, map<int, map<int, ADDRINT> > > g_graph;   // function->object->object->cost
+	map<UINT32, list<Object> > g_sTrace;       // function->object->cycle
+	map<UINT32, map<int, map<int, ADDRINT> > > g_sGraph;   // function->object->object->cost
 	
 	void DumpGraph(ostream &os);
 }
@@ -198,8 +198,9 @@ VOID OnStackWrite( ADDRINT nFunc, int disp, ADDRINT addr, bool bRead)
 {
 	(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE, 0);		
 	
-	map<int, map<int, ADDRINT> > &graph = Graph::g_graph[nFunc];
-	list<Graph::Object> &trace = Graph::g_trace[nFunc];
+	// search for different data objects in the preceeding trace, and construct the pair-wise proximity graph
+	map<int, map<int, ADDRINT> > &graph = Graph::g_sGraph[nFunc];
+	list<Graph::Object> &trace = Graph::g_sTrace[nFunc];
 	list<Graph::Object>::iterator i_p = trace.begin(), i_e = trace.end();
 	for(; i_p != i_e; ++ i_p)
 	{
@@ -212,6 +213,7 @@ VOID OnStackWrite( ADDRINT nFunc, int disp, ADDRINT addr, bool bRead)
 		graph[i_p->_object][disp] += (g_CurrentCycle - i_p->_cycle)/RefreshCycle;		
 	}
 	
+	// add a new data-write object
 	Graph::Object object;
 	object._cycle = g_CurrentCycle;
 	object._object = disp;
@@ -401,7 +403,7 @@ void Graph::DumpGraph(ostream &os)
 		}
 		os << endl;
 	}
-	map<UINT32, map<int, map<int, ADDRINT> > >::iterator i2i2i_p = g_graph.begin(), i2i2i_e = g_graph.end();
+	map<UINT32, map<int, map<int, ADDRINT> > >::iterator i2i2i_p = g_sGraph.begin(), i2i2i_e = g_sGraph.end();
 	for(; i2i2i_p != i2i2i_e; ++ i2i2i_p)
 	{
 		os << "###" << i2i2i_p->first << endl;

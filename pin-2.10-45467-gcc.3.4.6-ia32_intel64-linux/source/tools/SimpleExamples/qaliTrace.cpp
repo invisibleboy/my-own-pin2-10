@@ -195,7 +195,7 @@ void OnMemory(INS ins, void *v)
 /* get instruction the stack base/top address                                                                 */
 /* ===================================================================== */
 
-VOID StackAccess(ADDRINT addr, ADDRINT nFunc, UINT32 oriDisp, bool bRead)
+VOID StackAccessDump(ADDRINT addr, ADDRINT nFunc, UINT32 oriDisp, bool bRead)
 {	
 	if( bRead)
 		g_traceFile << endl << "R:";
@@ -216,7 +216,7 @@ VOID OnStackAccess(INS ins, void *v)
 	
 	if( bRead )	
 		INS_InsertCall(ins,
-			IPOINT_BEFORE, AFUNPTR(StackAccess),
+			IPOINT_BEFORE, AFUNPTR(StackAccessDump),
 			IARG_MEMORYREAD_EA,	
 			IARG_ADDRINT, nFunc,
 			IARG_UINT32, disp,
@@ -225,7 +225,7 @@ VOID OnStackAccess(INS ins, void *v)
 			IARG_END);				
 	else
 		INS_InsertCall(ins,
-			IPOINT_BEFORE, AFUNPTR(StackAccess),
+			IPOINT_BEFORE, AFUNPTR(StackAccessDump),
 			IARG_MEMORYWRITE_EA,	
 			IARG_ADDRINT, nFunc,
 			IARG_UINT32, disp,
@@ -247,7 +247,7 @@ VOID Image(IMG img, VOID *v)
 		{			
 			RTN_Open(rtn);
 			bool bLargeFunc = false;
-			// 1. track the change of stack frame by user functions, by searching "sub $24, esp"
+			// 1. track the change of stack frame of user functions, by searching "sub $24, esp"
 			for( INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins) )
 			{
 				//cout << hex << INS_Address(ins) << endl;	
@@ -258,7 +258,7 @@ VOID Image(IMG img, VOID *v)
 					INS_OperandIsReg( ins ,0) && 
 					INS_OperandReg( ins, 0) == REG_STACK_PTR )
 				{				
-					// treat functions with stack less than 3x block size as small functions
+					// treat functions with stack less than 1x block size as small functions
 					UINT32 nOffset = (UINT32) INS_OperandImmediate(ins, 1);
 					//cerr << endl << "Offset:\t" << nOffset << endl;
 					if( nOffset >= KnobLineSize.Value() * 1 )
