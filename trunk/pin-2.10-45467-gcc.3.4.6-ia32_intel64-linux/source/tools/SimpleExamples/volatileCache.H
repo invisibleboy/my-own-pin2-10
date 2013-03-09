@@ -64,7 +64,7 @@ class Volatile_LRU_CACHE_SET
 {
   private:
     CACHE_TAG _tags[MAX_ASSOCIATIVITY];
-	ADDRINT _refreCount[MAX_ASSOCIATIVITY];
+	ADDRINT _bornCycle[MAX_ASSOCIATIVITY];
     UINT32 _tagsLastIndex;
     UINT32 _nextReplaceIndex;
 
@@ -97,11 +97,11 @@ class Volatile_LRU_CACHE_SET
 	for (INT32 index = _tagsLastIndex; index >= 0; index--)
         {
             _tags[index] = CACHE_TAG(0);
-            _tagsLRU.push_front(index);     // initial the lru list
+            _tagsLRU.push_front(index);     // initialize the lru list
 
 			_bDirty[index] = false;
 			_bValid[index] = false;
-			_refreCount[index] = 0;
+			_bornCycle[index] = 0;
         }
     }
 	
@@ -116,14 +116,13 @@ class Volatile_LRU_CACHE_SET
     UINT32 Find(CACHE_TAG tag, UINT32 &lineIndex, int &nWriteBack)
     {
         bool result = false;
-		nWriteBack = 0;
         for (INT32 index = _tagsLastIndex; index >= 0; index--)
         {
             // this is an ugly micro-optimization, but it does cause a
             // tighter assembly loop for ARM that way ...
             if(_tags[index] == tag && _bValid[index] )
 			{
-				nWriteBack += InValidate(index, g_bEnableAll);
+				nWriteBack += ValidCheck(index, g_bEnableAll);
 				if( _bValid[index] )
 				{
 					lineIndex = index;
@@ -134,11 +133,7 @@ class Volatile_LRU_CACHE_SET
         }
        return result;
     }
-/* switch opti_hardware
- * =0: refresh all valid blocks
- * =1: refresh all dirty blocks
- * =2: refresh limited times for dirty blocks
-*/
+
 
 void HitLRU(UINT32 lineIndex, bool bWrite)
 {
@@ -147,6 +142,7 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	if( bWrite )        
 		Refresh(lineIndex, true);
 	  
+	// LRU list algorithm
 	if( _tagsLRU.back() == lineIndex )
 		return;			
 
@@ -166,16 +162,17 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	  g_CurrentCycle += bWrite? _writePenalty: _readPenalty;
       UINT32 lineIndex = _tagsLRU.front();
 	  
-	  int nWriteBack = InValidate(lineIndex, g_bEnableAll);
+	  int nWriteBack = ValidCheck(lineIndex, g_bEnableAll);
 		  
 	  if( _bValid[lineIndex])
 		Refresh(lineIndex, false);
 	else
-		_refreCount[lineIndex] = g_CurrentCycle;
+		_bornCycle[lineIndex] = g_CurrentCycle;
 
     // stack, global, heap
 	_source[lineIndex] = nArea;
 	
+	  // LRU list algorithm
       _tags[lineIndex] = tag;
       _tagsLRU.pop_front();
       _tagsLRU.push_back(lineIndex);
@@ -196,37 +193,57 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
       }
       return 0;
   }
-  
- int InValidate(UINT32 index, bool bEnable)
+/* switch opti_hardware
+ * =0: refresh all valid blocks
+ * =1: refresh all dirty blocks
+ * =2: refresh limited times for dirty blocks
+ * 
+ * Output: the number of write back operations
+*/
+ int ValidCheck(UINT32 index, bool bEnable)
  {
 	 //if( !bEnable )
 	//	 return 0;
-	 int nWriteBack = 0;
+	 
 	 if( !_bValid[index] )
-		 return nWriteBack;
-	 if( opti_hardware == 0 )
-		 return nWriteBack;
+		 return 0;
+	 int nWriteBack = 0;
+	 ADDRINT interval = g_CurrentCycle - _bornCycle[index];
 	 // below are valid blocks
-	 ADDRINT interval = g_CurrentCycle - _refreCount[index];	 
+	 // if opti-0, all valid blocks should be refreshed, and no write-back, and keep valid 
+	 // the number of refresh will be computed during replace-process
+	 if( opti_hardware == 0 )
+	 {
+		 return 0;
+	 }
+	 // if interval < retention-time, no refresh and no write-back, and keep valid  	 
 	 if( interval < RefreshCycle )
-		 return nWriteBack;
+		 return 0;
 	// below are dinishing blocks
-	// opti-1 invalidate non-dirty block
-	if( opti_hardware == 1 && !_bDirty[index])
+	// if > retention-time && not dirty: no refresh, no write back, and invalidate it
+	if( !_bDirty[index] )
 	{
-		_bValid[index] = false;		 
-		return nWriteBack;
+		_bValid[index] = false;
+		return 0;
+	}
+	// opti-1 refresh valid & dirty block
+	// if > retention-time && dirty: refresh and no write-back and keep valid
+	// # of refresh will be computed during replace-process for optimization
+	if( opti_hardware == 1)
+	{			 
+		return 0;
 	}
 	
-	// below are dirty dinishing blocks	
-	// opti-2 write-back dirty block older than four-phase
+	
+	// below are dirty dinishing blocks: dirty && > retention-time
 	// opti-2 invalildate 2-retention-time block
+	// if interval >= 2-retention-time, then, refresh it once, write back it and invalidate it;
+	// else, no write-back, keep valid, and # of refresh is computed later for correctness
 	if( opti_hardware == 2 && interval >= RefreshCycle*2 )
 	{
 		 _bValid[index] = false;
 		 g_TotalRefresh += 1;
-		 if( _bDirty[index])
-			nWriteBack = 1;
+         nWriteBack = 1;
 	}
 	return nWriteBack;		 
  }
@@ -234,7 +251,7 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
  void Refresh(UINT32 index, bool bIntra)
  {
 	// distribution of intervals
-	ADDRINT interval = g_CurrentCycle - _refreCount[index];
+	ADDRINT interval = g_CurrentCycle - _bornCycle[index];
 	int nArea = _source[index];
 	if( !bIntra )
 		nArea = 3;
@@ -259,7 +276,7 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	g_TotalRefresh += nRefresh;
 	
 	// reset the timestamps
-	_refreCount[index] = g_CurrentCycle;
+	_bornCycle[index] = g_CurrentCycle;
 	
   }
   
@@ -274,7 +291,7 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	int nWriteback = 0;
 	for (INT32 index = _tagsLastIndex; index >= 0; index--)
 	{
-		nWriteback += InValidate(index, true);
+		nWriteback += ValidCheck(index, true);
 		if( _bValid[index] )
 			Refresh(index, false);
 	}

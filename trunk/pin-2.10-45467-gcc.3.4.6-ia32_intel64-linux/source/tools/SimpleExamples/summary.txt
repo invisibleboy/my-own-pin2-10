@@ -1,0 +1,8 @@
+==for volatile PCM: submitted to LCTES'2013:
+PCM1.cpp
+PCM2.cpp
+
+==for volatile STT-RAM: accepted by ASP-DAC'2013:
+qaliTrace.cpp: input is the application code, and output is the encoded trace.
+SymbolTrace.cpp: input is the encoded trace, and output is the pair-wise graph, as well as the baseline results
+SymbolTraceOpti.cpp: input is the encoded trace, the data-map as the allocation result, and output is the optimized results

@@ -472,11 +472,10 @@ unsigned int CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT add
     // ---by qali: for debugging
    // cerr << "access " << hex << addr << ":\tin cache[" << setIndex << "][" << set.GetSpot() << "]--" << (hit?"hit":"miss") << endl;     
 
-	unsigned int status = nHit;
+	unsigned int status = nHit;  // record the cache hit/miss information for the lower cache levels
 	status <<= 1;
 	if( hit )
 		status |= 1;
-	
 	
     return status;
 }
