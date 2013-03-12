@@ -3,9 +3,10 @@
  * 1. collect the user functions, and each user function's instruction-start and instruction-end addresses
  * 2. for each user instruction, compare the operand's address with the function's stack base address
  * 
- * input:
- * 1) the trace which distinguishes between instructions, stack/global/heap read/write
- * 2) the allocation results
+ * Input:
+ * 1) the encoded trace which distinguishes between instructions, stack/global/heap read/write
+ * 2) the data map as allocation results
+ * Output: the optimized results
  */
 
 #include "pin.H"
@@ -29,7 +30,9 @@ using namespace std;
 /* ===================================================================== */
 
 KNOB<string> KnobTraceFile(KNOB_MODE_WRITEONCE,    "pintool",
-    "ot", "symboltrace", "specify the output trace file");
+    "it", "trace", "specify the input trace file");
+KNOB<string> KnobDatamapFile(KNOB_MODE_WRITEONCE,    "pintool",
+    "id", "datamap", "specify the input data map file");
 KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE,    "pintool",
     "o", "stats", "specify the output stats file");
 KNOB<UINT32> KnobCacheSize(KNOB_MODE_WRITEONCE, "pintool",
@@ -80,7 +83,8 @@ map<ADDRINT, ActiveRec *> g_hEsp2ARs;
 
 map<ADDRINT, map<ADDRINT, ADDRINT> > g_DataMap;
 
-ofstream g_traceFile;
+ifstream g_traceFile;
+ifstream g_datamapFile;
 ofstream g_outputFile;
 
 map<ADDRINT, int> g_hFunc2Esp;
@@ -221,17 +225,18 @@ VOID OnStackAccess( ADDRINT nFunc, int oriDisp, ADDRINT oriAddr, bool bRead)
  * 'I:addr': instruction execution on addr
  * 'R:S:4200208:12:14073623860994': memory read on the stack of function-ptr (4200408) with offset (12) and address (140...)
  * 'W:addr': memory read on addr
-/* ===================================================================== */
+ * ===================================================================== */
 VOID Image(IMG img, VOID *v)
 {
 	int nArea = 0;     // 0 for stack, 1 for global, 2 for heap
 	
-	ifstream inf;
-	inf.open("trace");
-	string szLine;
-	while(inf.good())
+	g_traceFile.open(KnobTraceFile.Value().c_str() );	
+	if(!g_traceFile.good())
+		cerr << "Failed to open " << KnobTraceFile.Value().c_str();
+	while(g_traceFile.good())
 	{
-		getline(inf, szLine);
+		string szLine;
+		getline(g_traceFile, szLine);
 		if( szLine.size() < 1)
 			continue;
 		if( 'I' == szLine[0] )
@@ -310,7 +315,13 @@ VOID Fini(int code, VOID * v)
 {
 	// Finalize the work
 	dl1->Fini();
+	char buf[256];
+	sprintf(buf, "%u",KnobOptiHw.Value());
 	
+	string szOutFile = KnobOutputFile.Value() +"_" + buf;
+	g_outputFile.open(KnobOutputFile.Value().c_str() );	
+	if(!g_outputFile.good())
+		cerr << "Failed to open " << KnobOutputFile.Value().c_str();
 	g_outputFile << "#Parameters:\n";
 	g_outputFile << "L1 read/write latency:\t" << g_rLatL1 << "/" << g_wLatL1 << " cycle" << endl;
 	g_outputFile << "Memory read/write latency:\t" << g_memoryLatency << " cycle" << endl;
@@ -380,12 +391,11 @@ int main(int argc, char *argv[])
         return Usage();
     }    
 	
-	ifstream inf;
-	inf.open("alloc.txt");
-	if( !inf.good())
+	g_datamapFile.open(KnobDatamapFile.Value().c_str());
+	if( !g_datamapFile.good())
 		cerr << "Failed to open alloc.txt" << endl;
-	ReadMap(inf);
-	inf.close();
+	ReadMap(g_datamapFile);
+	g_datamapFile.close();
 
 	
 	dl1 = new DL1::CACHE("L1 Data Cache", 
@@ -403,14 +413,6 @@ int main(int argc, char *argv[])
 	g_BlockSize = KnobLineSize.Value();
 	RefreshCycle = KnobRetent.Value()/4*4;
 	g_memoryLatency = KnobMemLat.Value();
-    
-	g_traceFile.open(KnobTraceFile.Value().c_str() );
-	g_outputFile.open(KnobOutputFile.Value().c_str() );
-	
-	if(!g_traceFile.good())
-		cerr << "Failed to open " << KnobTraceFile.Value().c_str();
-	if(!g_outputFile.good())
-		cerr << "Failed to open " << KnobOutputFile.Value().c_str();
 	
 	// 1. Collect user functions from a external file
 	// 2. Collect the start address of user functions

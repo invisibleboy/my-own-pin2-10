@@ -2,6 +2,8 @@
  * This file is for generating the symbolized memory trace (currently only collecting local symbols)
  * 1. collect the user functions, and each user function's instruction-start and instruction-end addresses
  * 2. for each user instruction, compare the operand's address with the function's stack base address
+ * Input: the application code
+ * Output: the encoded trace
  */
 
 #include "pin.H"

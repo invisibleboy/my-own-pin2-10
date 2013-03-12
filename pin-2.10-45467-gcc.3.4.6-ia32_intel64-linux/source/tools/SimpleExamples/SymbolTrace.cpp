@@ -2,6 +2,8 @@
  * This file is for generating the symbolized memory trace (currently only collecting local symbols)
  * 1. collect the user functions, and each user function's instruction-start and instruction-end addresses
  * 2. for each user instruction, compare the operand's address with the function's stack base address
+ * Input: the encoded trace
+ * Output: the pair-wise graph, as well as the baseline results
  */
 
 #include "pin.H"
@@ -25,9 +27,11 @@ using namespace std;
 /* ===================================================================== */
 
 KNOB<string> KnobTraceFile(KNOB_MODE_WRITEONCE,    "pintool",
-    "ot", "symboltrace", "specify the output trace file");
+    "it", "trace", "specify the input trace file");
 KNOB<string> KnobOutputFile(KNOB_MODE_WRITEONCE,    "pintool",
     "o", "stats", "specify the output stats file");
+KNOB<string> KnobGraphFile(KNOB_MODE_WRITEONCE,    "pintool",
+    "og", "graph", "specify the output graph file");
 KNOB<UINT32> KnobCacheSize(KNOB_MODE_WRITEONCE, "pintool",
     "c","32", "cache size in kilobytes");
 KNOB<UINT32> KnobLineSize(KNOB_MODE_WRITEONCE, "pintool",
@@ -74,8 +78,9 @@ map<string, ADDRINT> g_hFuncs;
 map<ADDRINT, FuncRec *> g_hFunc2Recs;
 map<ADDRINT, ActiveRec *> g_hEsp2ARs;
 
-ofstream g_traceFile;
+ifstream g_traceFile;
 ofstream g_outputFile;
+ofstream g_graphFile;
 
 map<ADDRINT, int> g_hFunc2Esp;
 set<UINT32> g_largeFuncSet;
@@ -226,12 +231,13 @@ VOID Image(IMG img, VOID *v)
 {
 	int nArea = 0;     // 0 for stack, 1 for global, 2 for heap
 	
-	ifstream inf;
-	inf.open("trace");
+	g_traceFile.open(KnobTraceFile.Value().c_str() );	
+	if(!g_traceFile.good())
+		cerr << "Failed to open " << KnobTraceFile.Value().c_str();
 	string szLine;
-	while(inf.good())
+	while(g_traceFile.good())
 	{
-		getline(inf, szLine);
+		getline(g_traceFile, szLine);
 		if( szLine.size() < 1)
 			continue;
 		if( 'I' == szLine[0] )
@@ -313,6 +319,14 @@ VOID Fini(int code, VOID * v)
 	// Finalize the work
 	dl1->Fini();
 	
+	char buf[256];
+	sprintf(buf, "%u",KnobOptiHw.Value());
+	
+	string szOutFile = KnobOutputFile.Value() +"_" + buf;
+	g_outputFile.open(KnobOutputFile.Value().c_str() );	
+	if(!g_outputFile.good())
+		cerr << "Failed to open " << KnobOutputFile.Value().c_str();
+		
 	g_outputFile << "#Parameters:\n";
 	g_outputFile << "L1 read/write latency:\t" << g_rLatL1 << "/" << g_wLatL1 << " cycle" << endl;
 	g_outputFile << "Memory read/write latency:\t" << g_memoryLatency << " cycle" << endl;
@@ -322,9 +336,9 @@ VOID Fini(int code, VOID * v)
 	g_outputFile.close();
 	g_traceFile.close();
 	
-	ofstream outf("graph");
-	Graph::DumpGraph(outf);
-	outf.close();
+	g_graphFile.open(KnobGraphFile.Value().c_str());
+	Graph::DumpGraph(g_graphFile);
+	g_graphFile.close();
 }
 
 
@@ -358,13 +372,7 @@ int main(int argc, char *argv[])
 	RefreshCycle = KnobRetent.Value()/4*4;
 	g_memoryLatency = KnobMemLat.Value();
     
-	g_traceFile.open(KnobTraceFile.Value().c_str() );
-	g_outputFile.open(KnobOutputFile.Value().c_str() );
 	
-	if(!g_traceFile.good())
-		cerr << "Failed to open " << KnobTraceFile.Value().c_str();
-	if(!g_outputFile.good())
-		cerr << "Failed to open " << KnobOutputFile.Value().c_str();
 	
 	// 1. Collect user functions from a external file
 	//GetUserFunction();
