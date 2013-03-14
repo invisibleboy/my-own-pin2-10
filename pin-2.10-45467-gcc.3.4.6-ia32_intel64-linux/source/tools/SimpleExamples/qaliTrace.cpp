@@ -239,7 +239,7 @@ VOID OnStackAccess(INS ins, void *v)
 VOID Image(IMG img, VOID *v)
 {
 	g_EndOfImage = IMG_HighAddress(img);
-	cerr << endl << "End of image:\t" << g_EndOfImage << endl;
+	cerr << endl << "End of image:\t" << IMG_Name(img) << "@" << hex << g_EndOfImage <<dec << endl;
 	g_traceFile << endl << "#" << g_EndOfImage;
 	for( SEC sec = IMG_SecHead(img); SEC_Valid(sec); sec = SEC_Next(sec) )
 	{
