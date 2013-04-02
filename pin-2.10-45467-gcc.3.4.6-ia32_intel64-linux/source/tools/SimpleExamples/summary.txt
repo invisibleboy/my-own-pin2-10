@@ -3,6 +3,34 @@ PCM1.cpp
 PCM2.cpp
 
 ==for volatile STT-RAM: accepted by ASP-DAC'2013:
-qaliTrace.cpp: input is the application code, and output is the encoded trace.
-SymbolTrace.cpp: input is the encoded trace, and output is the pair-wise graph, as well as the baseline results
-SymbolTraceOpti.cpp: input is the encoded trace, the data-map as the allocation result, and output is the optimized results
+two methods and three schemes:
+two methods include ilp and non-ilp implementation.
+three schemes include full-refresh, dirty-refresh, and N-refresh. Controller by the HwOpti options.
+
+0. qaliTrace.cpp:
+input: the application code
+output: the encoded trace.
+
+1. non-ilp implementation
+1.1 SymbolTrace.cpp:
+input: the encoded trace
+output: the pair-wise graph, as well as the baseline results
+1.2 allocate.cpp: 
+input: the pair-wise graph
+output: the data-map as allocaton result 
+1.3 SymbolTraceOpti.cpp:
+input: the encoded trace, the data-map as the allocation result
+output: the optimized results
+
+2. ilp implementation
+2.1 volTrace2ilp.cpp: 
+input: the encoded trace
+output: the timed trace for ilp, the pair-wise graph, and baseline results.
+2.2 ilp solver:
+input: the timed trace <id, timestamp, data, function, size>, the blocks to allocate
+output: the data-map as allocation result
+2.3 SymbolTraceOpti.cpp
+input: ...
+output: ...
+ 
+

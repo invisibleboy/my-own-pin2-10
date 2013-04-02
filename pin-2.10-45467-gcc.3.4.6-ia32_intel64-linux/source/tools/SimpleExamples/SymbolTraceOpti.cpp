@@ -173,12 +173,12 @@ VOID LoadInst(ADDRINT addr)
 VOID LoadSingle(ADDRINT addr, int nArea)
 {
 	//cerr << "LoadSingle for " << addr << endl;
-	map<ADDRINT, ADDRINT> &dataMap = g_DataMap[0];
+	map<ADDRINT, ADDRINT> &dataMap = g_DataMap[1];
 	map<ADDRINT, ADDRINT>::iterator d_p = dataMap.find(addr);
 	if( d_p != dataMap.end() )
 	{
 		(void)dl1->AccessSingleLine(d_p->second, ACCESS_BASE::ACCESS_TYPE_LOAD, nArea);
-		cerr << endl << addr << " -> " << d_p->second ;
+		//cerr << endl << addr << " -> " << d_p->second ;
 	}
 	else
 		(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD, nArea);
@@ -187,12 +187,12 @@ VOID LoadSingle(ADDRINT addr, int nArea)
 
 VOID StoreSingle(ADDRINT addr, int nArea)
 {	
-	map<ADDRINT, ADDRINT> &dataMap = g_DataMap[0];
+	map<ADDRINT, ADDRINT> &dataMap = g_DataMap[1];
 	map<ADDRINT, ADDRINT>::iterator d_p = dataMap.find(addr);
 	if( d_p != dataMap.end() )
 	{
 		(void)dl1->AccessSingleLine(d_p->second, ACCESS_BASE::ACCESS_TYPE_STORE, nArea);
-		cerr << endl << addr << " -> " << d_p->second ;
+		//cerr << endl << addr << " -> " << d_p->second ;
 	}
 	else
 		(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE, nArea);
@@ -208,7 +208,7 @@ VOID OnStackAccess( ADDRINT nFunc, int oriDisp, ADDRINT oriAddr, bool bRead)
 	{
 		int disp2 = (int) d_p->second;
 		int disp1 = (int) oriDisp;
-		cerr << endl << addr << "(" << disp1 << ") -> " << addr+disp2-disp1 << "(" << disp2 << ")";
+		//cerr << endl << addr << "(" << disp1 << ") -> " << addr+disp2-disp1 << "(" << disp2 << ")";
 		
 		addr = oriAddr + disp2 - disp1;		
 	}
@@ -226,7 +226,7 @@ VOID OnStackAccess( ADDRINT nFunc, int oriDisp, ADDRINT oriAddr, bool bRead)
  * 'R:S:4200208:12:14073623860994': memory read on the stack of function-ptr (4200408) with offset (12) and address (140...)
  * 'W:addr': memory read on addr
  * ===================================================================== */
-VOID Image(IMG img, VOID *v)
+VOID Image(VOID *v)
 {
 	int nArea = 0;     // 0 for stack, 1 for global, 2 for heap
 	
@@ -315,10 +315,10 @@ VOID Fini(int code, VOID * v)
 {
 	// Finalize the work
 	dl1->Fini();
-	char buf[256];
-	sprintf(buf, "%u",KnobOptiHw.Value());
+	//char buf[256];
+	//sprintf(buf, "%u",KnobOptiHw.Value());
 	
-	string szOutFile = KnobOutputFile.Value() +"_" + buf;
+	//string szOutFile = KnobOutputFile.Value() +"_" + buf;
 	g_outputFile.open(KnobOutputFile.Value().c_str() );	
 	if(!g_outputFile.good())
 		cerr << "Failed to open " << KnobOutputFile.Value().c_str();
@@ -384,7 +384,7 @@ void ReadMap(ifstream &inf)
 
 int main(int argc, char *argv[])
 {
-    PIN_InitSymbols();
+    //PIN_InitSymbols();
 
     if( PIN_Init(argc,argv) )
     {
@@ -393,7 +393,7 @@ int main(int argc, char *argv[])
 	
 	g_datamapFile.open(KnobDatamapFile.Value().c_str());
 	if( !g_datamapFile.good())
-		cerr << "Failed to open alloc.txt" << endl;
+		cerr << "Failed to open " << KnobDatamapFile.Value() << endl;
 	ReadMap(g_datamapFile);
 	g_datamapFile.close();
 
@@ -414,17 +414,8 @@ int main(int argc, char *argv[])
 	RefreshCycle = KnobRetent.Value()/4*4;
 	g_memoryLatency = KnobMemLat.Value();
 	
-	// 1. Collect user functions from a external file
-	// 2. Collect the start address of user functions
-	IMG_AddInstrumentFunction(Image, 0);
-	// 3. Collect dynamic stack base address when function-calling
-	// 4. Deal with each instruction	
-    //INS_AddInstrumentFunction(Instruction, 0);
-    PIN_AddFiniFunction(Fini, 0);
-
-    // Never returns
-
-    PIN_StartProgram();
+	Image(0);
+	Fini(0,0);
     
     return 0;
 }
