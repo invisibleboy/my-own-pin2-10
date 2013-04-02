@@ -9,9 +9,16 @@
 
 using namespace std;
 
+//cache configuration
+//#define CACHE_LINE_SIZE "32"
+
+//#define CACHE_SIZE	32"
+//#define CACHE_RETENTION "53000"
+//#define MEMORY_LAT 300
+
 extern ADDRINT RefreshCycle;
 UINT32 g_BlockSize;
-ADDRINT g_CurrentCycle;
+ADDRINT g_CurrentCycle=0;
 ADDRINT g_Intervals[4][7];
 ADDRINT g_TotalRefresh;
 ADDRINT g_EndOfImage;    // end of global area
@@ -220,30 +227,52 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 	 if( interval < RefreshCycle )
 		 return 0;
 	// below are dinishing blocks
-	// if > retention-time && not dirty: no refresh, no write back, and invalidate it
-	if( !_bDirty[index] )
-	{
-		_bValid[index] = false;
-		return 0;
-	}
+	
 	// opti-1 refresh valid & dirty block
 	// if > retention-time && dirty: refresh and no write-back and keep valid
 	// # of refresh will be computed during replace-process for optimization
 	if( opti_hardware == 1)
 	{			 
-		return 0;
+		// if > retention-time && not dirty: no refresh, no write back, and invalidate it
+		if( !_bDirty[index] )
+		{
+			_bValid[index] = false;
+			return 0;
+		}
 	}
 	
 	
-	// below are dirty dinishing blocks: dirty && > retention-time
+	// below are dinishing blocks: > retention-time
 	// opti-2 invalildate 2-retention-time block
 	// if interval >= 2-retention-time, then, refresh it once, write back it and invalidate it;
 	// else, no write-back, keep valid, and # of refresh is computed later for correctness
-	if( opti_hardware == 2 && interval >= RefreshCycle*2 )
+	else if( opti_hardware >= 2 ) 
 	{
-		 _bValid[index] = false;
-		 g_TotalRefresh += 1;
-         nWriteBack = 1;
+		int N = opti_hardware - 1;
+		if ( N == 1 && interval >= RefreshCycle*2 )
+		{
+			 _bValid[index] = false;
+			 g_TotalRefresh += 1;
+			 nWriteBack = 1;
+		}
+		else if( N == 2 && interval >= RefreshCycle*4)
+		{
+			_bValid[index] = false;
+			g_TotalRefresh += 3;
+			nWriteBack = 1;
+		}
+		else if( N == 3 && interval >= RefreshCycle*8)
+		{
+			_bValid[index] = false;
+			g_TotalRefresh += 7;
+			nWriteBack = 1;
+		}
+		else if( N == 4 )
+		{
+			_bValid[index] = false;
+			if( _bDirty[index])
+				nWriteBack = 1;
+		}
 	}
 	return nWriteBack;		 
  }
@@ -288,6 +317,7 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
   
   int Fini()
   {
+	//cerr << "# of refresh:\t" << g_TotalRefresh << endl;
 	int nWriteback = 0;
 	for (INT32 index = _tagsLastIndex; index >= 0; index--)
 	{
@@ -295,6 +325,7 @@ void HitLRU(UINT32 lineIndex, bool bWrite)
 		if( _bValid[index] )
 			Refresh(index, false);
 	}
+	//cerr << "# of refresh:\t" << g_TotalRefresh << endl;
 	return nWriteback;
   }
 };
