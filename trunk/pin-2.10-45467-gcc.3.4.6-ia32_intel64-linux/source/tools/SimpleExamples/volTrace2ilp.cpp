@@ -49,6 +49,10 @@ KNOB<UINT32> KnobMemLat(KNOB_MODE_WRITEONCE, "pintool",
 	"m", "300", "memory latency" );
 KNOB<int> KnobOptiHw(KNOB_MODE_WRITEONCE, "pintool",
 	"hw", "0", "hardware optimization: full-refresh, dirty-refresh, N-refresh");
+KNOB<int> KnobWriteLatency(KNOB_MODE_WRITEONCE, "pintool",
+	"wl", "4", "write latency: 3,4,5,6,7,8");
+KNOB<int> KnobHeadValue(KNOB_MODE_WRITEONCE, "pintool",
+	"head", "400", "the head n data writes: 400, 420, 440, 460, 500");
 
 /* ===================================================================== */
 /* Data structure                                                  */
@@ -101,9 +105,12 @@ UINT32 g_memoryLatency;
 
 // latency
 const ADDRINT g_rLatL1 = 2;
-const ADDRINT g_wLatL1 = 4;
+ADDRINT g_wLatL1 = 4;
 
 ADDRINT g_testCounter = 0;
+
+static int g_nHead = 0;
+
 // trace output
 namespace Graph
 {
@@ -172,7 +179,7 @@ namespace IL1
     const UINT32 max_associativity = 16; // associativity;
     const CACHE_ALLOC::STORE_ALLOCATION allocation = CACHE_ALLOC::STORE_ALLOCATE;
 	
-	typedef CACHE1<CACHE_SET::Volatile_LRU_CACHE_SET<max_associativity>, max_sets, allocation> CACHE;
+	typedef CACHE1<CACHE_SET::LRU_CACHE_SET<max_associativity>, max_sets, allocation> CACHE;
 }
 
 IL1::CACHE* il1 = NULL;
@@ -185,7 +192,6 @@ VOID LoadInst(ADDRINT addr)
 	//cerr << "LoadInst for " << hex << addr << ": " << ++g_testCounter << endl;
 
 	(void)il1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD, 0);
-		
 }
 /* ===================================================================== */
 
@@ -299,6 +305,7 @@ VOID Image( VOID *v)
 {
 	int nArea = 0;     // 0 for stack, 1 for global, 2 for heap
 	
+	int nHead = 0;
 	g_iTraceFile.open(KnobITraceFile.Value().c_str() );	
 	if(!g_iTraceFile.good())
 		cerr << "Failed to open " << KnobOTraceFile.Value().c_str();
@@ -357,7 +364,12 @@ VOID Image( VOID *v)
 				if( bRead)
 					LoadSingle(addr, nArea);	
 				else
+				{
 					StoreSingle(addr, nArea);
+					++ nHead;
+					if( nHead >= g_nHead)
+						break;
+				}
 			}
 			else if( 'H' == szLine[2] )
 			{
@@ -501,21 +513,23 @@ int main(int argc, char *argv[])
         return Usage();
     }    
 	
+	g_wLatL1 = KnobWriteLatency.Value();
 	dl1 = new DL1::CACHE("L1 Data Cache", 
 		KnobCacheSize.Value() * KILO,
 		KnobLineSize.Value(),
 		KnobAssociativity.Value());
 	dl1->SetLatency(g_rLatL1, g_wLatL1);
 	il1 = new IL1::CACHE("L1 Instruction Cache", 
-		KnobCacheSize.Value() * KILO, 
-		KnobLineSize.Value(),
-		KnobAssociativity.Value());
+		32 * KILO, 
+		64,
+		4);
 	il1->SetLatency(g_rLatL1,g_wLatL1);
 	
 	opti_hardware = KnobOptiHw.Value();
 	g_BlockSize = KnobLineSize.Value();
 	RefreshCycle = KnobRetent.Value()/4*4;
 	g_memoryLatency = KnobMemLat.Value();
+	g_nHead = KnobHeadValue.Value();
     
 	Image(0);
 	Fini(0,0);

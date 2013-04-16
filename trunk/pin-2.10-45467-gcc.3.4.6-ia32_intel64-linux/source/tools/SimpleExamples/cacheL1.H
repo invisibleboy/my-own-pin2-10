@@ -425,7 +425,7 @@ unsigned int CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT add
   int nWriteBack = 0;
   bool hit = set.Find(tag, lineIndex, nWriteBack);
   unsigned int nHit = 0;
-
+    
     //assert(STORE_ALLOCATION == CACHE_ALLOC::STORE_NO_ALLOCATE);
     // on miss, loads always allocate, stores optionally
 	if( hit )
@@ -513,38 +513,38 @@ string CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::StatsLong(string prefix, CACHE_TYP
 
 	   std::string type(accessType == ACCESS_BASE::ACCESS_TYPE_LOAD? "Load" : "Store");
 
-	   out += prefix + ljstr(type + "-Hits:      ", headerWidth)
+	   out += prefix + ljstr(type + "-Hits\t      ", headerWidth)
 			  + mydecstr(Hits(accessType), numberWidth)  +
-			  ":  " + fltstr(100.0 * Hits(accessType) / Accesses(accessType), 2, 6) + "%\n";
+			  "\t  " + fltstr(100.0 * Hits(accessType) / Accesses(accessType), 2, 6) + "%\n";
 
-	   out += prefix + ljstr(type + "-Misses:    ", headerWidth)
+	   out += prefix + ljstr(type + "-Misses\t    ", headerWidth)
 			  + mydecstr(Misses(accessType), numberWidth) +
-			  ":  " +fltstr(100.0 * Misses(accessType) / Accesses(accessType), 2, 6) + "%\n";
+			  "\t  " +fltstr(100.0 * Misses(accessType) / Accesses(accessType), 2, 6) + "%\n";
 
-	   out += prefix + ljstr(type + "-Accesses:  ", headerWidth)
+	   out += prefix + ljstr(type + "-Accesses\t  ", headerWidth)
 			  + mydecstr(Accesses(accessType), numberWidth) +
-			  ":  " +fltstr(100.0 * Accesses(accessType) / Accesses(accessType), 2, 6) + "%\n";
+			  "\t  " +fltstr(100.0 * Accesses(accessType) / Accesses(accessType), 2, 6) + "%\n";
 
 	   out += prefix + "\n";
    }
 
 
-    out += prefix + ljstr("Total-Hits:      ", headerWidth)
+    out += prefix + ljstr("Total-Hits\t      ", headerWidth)
            + mydecstr(Hits(), numberWidth) +
-           ":  " +fltstr(100.0 * Hits() / Accesses(), 2, 6) + "%\n";
+           "\t  " +fltstr(100.0 * Hits() / Accesses(), 2, 6) + "%\n";
 
-    out += prefix + ljstr("Total-Misses:    ", headerWidth)
+    out += prefix + ljstr("Total-Misses\t    ", headerWidth)
            + mydecstr(Misses(), numberWidth) +
-           ":  " +fltstr(100.0 * Misses() / Accesses(), 2, 6) + "%\n";
+           "\t  " +fltstr(100.0 * Misses() / Accesses(), 2, 6) + "%\n";
 
-    out += prefix + ljstr("Total-Accesses:  ", headerWidth)
+    out += prefix + ljstr("Total-Accesses\t  ", headerWidth)
            + mydecstr(Accesses(), numberWidth) +
-           ":  " +fltstr(100.0 * Accesses() / Accesses(), 2, 6) + "%\n";
+           "\t  " +fltstr(100.0 * Accesses() / Accesses(), 2, 6) + "%\n";
     out += "\n";
 
-    out += prefix + ljstr("Total-Writeback:      ", headerWidth)
+    out += prefix + ljstr("Total-Writeback\t      ", headerWidth)
            + mydecstr(_writeback, numberWidth) +
-           ":  " +fltstr(100.0 * _writeback / Accesses(), 2, 6) + "%\n";
+           "\t  " +fltstr(100.0 * _writeback / Accesses(), 2, 6) + "%\n";
     return out;
 }
 
