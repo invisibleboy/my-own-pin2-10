@@ -33,15 +33,15 @@ namespace CACHE_SET
 	void DumpRefresh(ostream &os)
 	{
 		os << "++++++++++++Refresh info+++++++++++++++" << endl;
-		os << "Refresh Cycle:\t" << RefreshCycle << endl;
-		os << "Total refresh:\t" << g_TotalRefresh << endl;
-		os << "Total cycles:\t" << g_CurrentCycle << endl;
+		os << "Refresh Cycle\t" << RefreshCycle << endl;
+		os << "Total refresh\t" << g_TotalRefresh << endl;
+		os << "Total cycles\t" << g_CurrentCycle << endl;
 		
 		ADDRINT nTotal = 0;
 		for( int j =0; j < 4; ++ j)
 		for( int i =0; i < 6; ++ i )
 			nTotal += g_Intervals[j][i];
-		os << "Total intervals:\t" << nTotal << endl;
+		os << "Total intervals\t" << nTotal << endl;
 		os << "Cycle distribution of consecutive auto-refresh (write and miss-load) for blocks:\n";
 		for( int j=0; j < 4; ++ j)
 		{
