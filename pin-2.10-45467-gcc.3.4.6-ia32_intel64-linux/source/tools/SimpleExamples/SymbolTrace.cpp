@@ -46,6 +46,10 @@ KNOB<UINT32> KnobMemLat(KNOB_MODE_WRITEONCE, "pintool",
 	"m", "300", "memory latency" );
 KNOB<int> KnobOptiHw(KNOB_MODE_WRITEONCE, "pintool",
 	"hw", "0", "hardware optimization: Lihai, Xieyuan, Jason");
+KNOB<int> KnobWriteLatency(KNOB_MODE_WRITEONCE, "pintool",
+	"wl", "4", "write latency: 3,4,5,6,7,8");
+KNOB<int> KnobHeadValue(KNOB_MODE_WRITEONCE, "pintool",
+	"head", "400", "the head n data writes: 400, 420, 440, 460, 500");
 
 /* ===================================================================== */
 /* Data structure                                                  */
