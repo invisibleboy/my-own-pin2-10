@@ -105,12 +105,13 @@ UINT32 g_memoryLatency;
 
 // latency
 const ADDRINT g_rLatL1 = 2;
-ADDRINT g_wLatL1 = 4;
+ADDRINT g_wLatL1 = 1;
 
 ADDRINT g_testCounter = 0;
 
 static int g_nHead = 0;
-static int g_nHeads = 0;
+static int g_nRealHead = 0;
+static int g_nRealHeads = 0;
 
 // trace output
 namespace Graph
@@ -306,7 +307,7 @@ VOID Image( VOID *v)
 {
 	int nArea = 0;     // 0 for stack, 1 for global, 2 for heap	
 	
-	int nHead = 0;
+	
 	cerr << "load Image..." << endl;
 	g_iTraceFile.open(KnobITraceFile.Value().c_str() );	
 	if(!g_iTraceFile.good())
@@ -355,7 +356,7 @@ VOID Image( VOID *v)
 				else
 				{
 					OnStackWrite(nFunc, disp, addr, bRead);			
-					++ g_nHeads;
+					++ g_nRealHeads;
 				}
 			}
 			// W:G:6962120
@@ -371,9 +372,9 @@ VOID Image( VOID *v)
 				else
 				{
 					StoreSingle(addr, nArea);
-					++ nHead;
-					++ g_nHeads;
-					if( nHead >= g_nHead)
+					++ g_nRealHead;
+					++ g_nRealHeads;
+					if( g_nRealHead >= g_nHead)
 						break;
 				}
 			}
@@ -499,7 +500,7 @@ VOID Fini(int code, VOID * v)
 	if(!outf.good())
 		cerr << "Failed to open " << KnobOutputFile.Value().c_str();
 		
-	outf << "The top " << g_nHead << "/" << g_nHeads << " of the trace" << endl;
+	outf << "The top " << g_nRealHead << "/" << g_nRealHeads << "(" << ((double)g_nRealHead)/g_nRealHeads << ")" << " of the write trace" << endl;
 	outf << "#Parameters:\n";
 	outf << "L1 read/write latency:\t" << g_rLatL1 << "/" << g_wLatL1 << " cycle" << endl;
 	outf << "Memory read/write latency:\t" << g_memoryLatency << " cycle" << endl;
