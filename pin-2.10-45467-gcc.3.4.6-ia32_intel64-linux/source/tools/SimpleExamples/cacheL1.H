@@ -464,7 +464,8 @@ unsigned int CACHE1<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT add
 	// write miss, in non-write-allocation, write into lower memory directly
 	else
 	{
-		if( m_pNextCache)			nHit = m_pNextCache->AccessSingleLine(addr, accessType, nArea);
+		if( m_pNextCache)
+			nHit = m_pNextCache->AccessSingleLine(addr, accessType, nArea);
 	}
 	_writeback += nWriteBack;
     _access[accessType][hit]++;

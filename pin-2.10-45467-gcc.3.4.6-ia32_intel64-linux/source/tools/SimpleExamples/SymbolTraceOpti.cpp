@@ -100,7 +100,7 @@ UINT32 g_memoryLatency;
 
 // latency
 const ADDRINT g_rLatL1 = 2;
-ADDRINT g_wLatL1 = 4;
+ADDRINT g_wLatL1 = 1;
 
 static int g_nHead = 0;
 
