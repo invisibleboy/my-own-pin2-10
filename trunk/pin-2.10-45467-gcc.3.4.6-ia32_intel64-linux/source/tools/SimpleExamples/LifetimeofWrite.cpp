@@ -51,6 +51,7 @@ END_LEGAL */
 #include <fstream>
 #include <map>
 #include <sstream>
+#include <vector>
 //#include "cacheHybrid.H"
 #include "cacheL1.H"
 #include "volatileCache.H"
@@ -114,7 +115,9 @@ double g_nTotalEnergySlow = 0.0;
 
 std::map<ADDRINT, UINT64> g_hLastR;
 std::map<ADDRINT, UINT64> g_hLastW;
-UINT64 g_Lifetime[LENGTH];
+vector<UINT64> g_Lifetime;
+vector<UINT64> g_Lifetime2;
+UINT32 g_nDeadIntervals;
 
 ifstream g_iTraceFile;
 ofstream g_oTraceFile;
@@ -162,6 +165,30 @@ namespace IL1
 }
 
 IL1::CACHE* il1 = NULL;
+/* ==================================================*/
+ADDRINT MemoryBlock(ADDRINT addr)
+{
+	int blockSize = KnobLineSize.Value();
+	return addr/blockSize;
+}
+void RecLifetime(std::vector<ADDRINT> &recs, INT64 interval)
+{
+	if( interval < 6625)  // 8k
+		++ recs[0];
+	else if( interval < 13250 )		//  16k
+		++ recs[1];
+	else if( interval < 26500 )
+		++ recs[2];
+	else if( interval < 53000 )    // 32k
+		++ recs[3];
+	else if( interval < 106000 )  // 64k
+		++ recs[4];
+	else if( interval < 212000 ) // <128k
+		++ recs[5];
+	else 
+		++ recs[6];
+}
+
 
 /* ===================================================================== */
 VOID LoadInst(ADDRINT addr)
@@ -178,51 +205,58 @@ VOID LoadSingle(ADDRINT addr, int nArea)
 	//cerr << "LoadSingle for " << addr << endl;
 	(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_LOAD, nArea);
 	++ g_nTotalRead;
-    g_hLastR[addr] = g_CurrentCycle;
+    g_hLastR[MemoryBlock(addr)] = g_CurrentCycle;
 }
 /* ===================================================================== */
 
 VOID StoreSingle(ADDRINT addr, int nArea)
 {	
 	++ g_nTotalWrite;
-	(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE, nArea);
+	(void)dl1->AccessSingleLine(addr, ACCESS_BASE::ACCESS_TYPE_STORE, nArea);	
 	
-	std::map<ADDRINT, UINT64>::iterator R = g_hLastR.find(addr);
-	std::map<ADDRINT, UINT64>::iterator W = g_hLastW.find(addr);
-	if( R != g_hLastR.end() && W != g_hLastW.end() )
+	std::map<ADDRINT, UINT64>::iterator W = g_hLastW.find(MemoryBlock(addr));
+	
+	// 1. compute the interval between write and the last read of it
+	std::map<ADDRINT, UINT64>::iterator R = g_hLastR.find(MemoryBlock(addr));	
+	if( W != g_hLastW.end() )
 	{
-		INT64 interval = R->second - W->second;
-		
-	//	cerr << "interval = " << interval << endl;
-		if( interval > 0)
-		{		
-			if( interval < 5000 )  // 8k
-				++ g_Lifetime[0];
-			else if( interval < 10000 )		//  16k
-				++ g_Lifetime[1];
-			else if( interval < 20000 )    // 32k
-				++ g_Lifetime[2];
-			else if( interval < 50000 )  // 64k
-				++ g_Lifetime[3];
-			else if( interval < 100000 ) // <128k
-				++ g_Lifetime[4];
-			else if( interval < 200000) // <256k
-				++ g_Lifetime[5];
-			else 
-				++ g_Lifetime[6];
-		}
-		else		// indicates sequential writes
+		INT64 interval = 0;
+		if( R != g_hLastR.end() )
 		{
-			++ g_Lifetime[0];
+			interval = R->second - W->second;
+			if( interval > 0 )
+			{
+				RecLifetime(g_Lifetime, interval);
+			}
+			else
+			{
+				RecLifetime(g_Lifetime, 0);   // sequential writes indicates an interval of zero
+				interval = g_CurrentCycle - W->second;
+				if( interval >= 13250 )
+					++ g_nDeadIntervals;
+			}
 		}
+		else         // sequential writes
+		{
+			RecLifetime(g_Lifetime, 0);
+			interval = g_CurrentCycle - W->second;
+			if( interval >= 13250 )
+				++ g_nDeadIntervals;
+		}
+			
 	}
-	else if( W != g_hLastW.end() )
-	{
-		++ g_Lifetime[0];
-	}
+	
+	// 2. compute the interval between sequential writes
+	if( W != g_hLastW.end() )
+	{		
+		INT64 interval = g_CurrentCycle - W->second;
+		RecLifetime(g_Lifetime2, interval);		
+	}	
 	
 	// update the write-mark
-	g_hLastW[addr] = g_CurrentCycle;	
+	g_hLastW[MemoryBlock(addr)] = g_CurrentCycle;	
+	
+	
 }
 
 VOID Image( VOID *v)
@@ -325,6 +359,25 @@ VOID Fini(int code, VOID * v)
 	// Finalize the work
 	dl1->Fini();
 	
+	// collect interval between last write time and the ending time
+	std::map<ADDRINT, UINT64>::iterator W = g_hLastW.begin(), E = g_hLastW.end();
+	for(; W != E; ++ W)
+	{
+		INT64 interval = g_CurrentCycle - W->second;
+		RecLifetime(g_Lifetime2, interval);	
+		
+		ADDRINT memAddr = W->first;
+		std::map<ADDRINT, UINT64>::iterator R = g_hLastR.find(memAddr);
+		if( R != g_hLastR.end() && R->second > W->second )
+			continue;
+		else
+		{
+			interval = g_CurrentCycle - W->second;
+			if( interval >= 13250 )
+				++ g_nDeadIntervals;
+		}
+	}
+	
 	// dump baseline results
 	char buf[256];
 	sprintf(buf, "%u",KnobOptiHw.Value());
@@ -351,14 +404,29 @@ VOID Fini(int code, VOID * v)
 	double dTotalInterval = 0.0;
 	for( int i = 0; i < LENGTH; ++ i)
 		dTotalInterval += g_Lifetime[i];
-	outf << "Total intervals\t" << dTotalInterval << endl;
-	outf << "[0~5000)\t" << g_Lifetime[0] << "\t" << g_Lifetime[0]/dTotalInterval << endl;
-	outf << "[5000~10000)\t" << g_Lifetime[1]<< "\t" << g_Lifetime[1]/dTotalInterval<< endl;;
-	outf << "[10000~20000)\t" << g_Lifetime[2]<< "\t" << g_Lifetime[2]/dTotalInterval<< endl;;
-	outf << "[20000~50000)\t" << g_Lifetime[3]<< "\t" << g_Lifetime[3]/dTotalInterval<< endl;;
-	outf << "[50000~100000)\t" << g_Lifetime[4]<< "\t" << g_Lifetime[4]/dTotalInterval<< endl;;
-	outf << "[100000~200000)\t" << g_Lifetime[5]<< "\t" << g_Lifetime[5]/dTotalInterval<< endl;;
-	outf << "[200000~)\t" << g_Lifetime[6]<< "\t" << g_Lifetime[6]/dTotalInterval<< endl;;
+	outf << "Total intervals 1\t" << dTotalInterval << endl;
+	outf << "[0~6625)\t" << g_Lifetime[0] << "\t" << g_Lifetime[0]/dTotalInterval << endl;
+	outf << "[6625~13250)\t" << g_Lifetime[1]<< "\t" << g_Lifetime[1]/dTotalInterval<< endl;;
+	outf << "[13250~26500)\t" << g_Lifetime[2]<< "\t" << g_Lifetime[2]/dTotalInterval<< endl;;
+	outf << "[26500~53000)\t" << g_Lifetime[3]<< "\t" << g_Lifetime[3]/dTotalInterval<< endl;;
+	outf << "[53000~106000)\t" << g_Lifetime[4]<< "\t" << g_Lifetime[4]/dTotalInterval<< endl;;
+	outf << "[106000~212000)\t" << g_Lifetime[5]<< "\t" << g_Lifetime[5]/dTotalInterval<< endl;;
+	outf << "[212000~)\t" << g_Lifetime[6]<< "\t" << g_Lifetime[6]/dTotalInterval<< endl;;
+	//outf.close();
+	
+	outf << "Dead intervals (>13250)\t" << g_nDeadIntervals << endl;
+	
+	dTotalInterval = 0.0;
+	for( int i = 0; i < LENGTH; ++ i)
+		dTotalInterval += g_Lifetime2[i];
+	outf << "Total intervals 2 \t" << dTotalInterval << endl;
+	outf << "[0~6625)\t" << g_Lifetime2[0] << "\t" << g_Lifetime2[0]/dTotalInterval << endl;
+	outf << "[6625~13250)\t" << g_Lifetime2[1]<< "\t" << g_Lifetime2[1]/dTotalInterval<< endl;;
+	outf << "[10000~20000)\t" << g_Lifetime2[2]<< "\t" << g_Lifetime2[2]/dTotalInterval<< endl;;
+	outf << "[20000~50000)\t" << g_Lifetime2[3]<< "\t" << g_Lifetime2[3]/dTotalInterval<< endl;;
+	outf << "[50000~100000)\t" << g_Lifetime2[4]<< "\t" << g_Lifetime2[4]/dTotalInterval<< endl;;
+	outf << "[100000~200000)\t" << g_Lifetime2[5]<< "\t" << g_Lifetime2[5]/dTotalInterval<< endl;;
+	outf << "[200000~)\t" << g_Lifetime2[6]<< "\t" << g_Lifetime2[6]/dTotalInterval<< endl;;
 	outf.close();
 	
 	// dump pair-wise graph
@@ -381,6 +449,8 @@ int main(int argc, char *argv[])
         return Usage();
     }    
 	
+	g_Lifetime.assign(LENGTH, 0);
+	g_Lifetime2.assign(LENGTH, 0);
 	g_wLatL1 = KnobWriteLatency.Value();
 	dl1 = new DL1::CACHE("L1 Data Cache", 
 		KnobCacheSize.Value() * KILO,

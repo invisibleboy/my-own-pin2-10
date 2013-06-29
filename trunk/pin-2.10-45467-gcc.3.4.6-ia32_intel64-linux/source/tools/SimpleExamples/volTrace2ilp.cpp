@@ -110,6 +110,7 @@ ADDRINT g_wLatL1 = 4;
 ADDRINT g_testCounter = 0;
 
 static int g_nHead = 0;
+static int g_nHeads = 0;
 
 // trace output
 namespace Graph
@@ -303,12 +304,13 @@ VOID OnStackWrite( ADDRINT nFunc, int disp, ADDRINT addr, bool bRead)
 /* ===================================================================== */
 VOID Image( VOID *v)
 {
-	int nArea = 0;     // 0 for stack, 1 for global, 2 for heap
+	int nArea = 0;     // 0 for stack, 1 for global, 2 for heap	
 	
 	int nHead = 0;
+	cerr << "load Image..." << endl;
 	g_iTraceFile.open(KnobITraceFile.Value().c_str() );	
 	if(!g_iTraceFile.good())
-		cerr << "Failed to open " << KnobOTraceFile.Value().c_str();
+		cerr << "Failed to open " << KnobITraceFile.Value().c_str();
 	string szLine;
 	while(g_iTraceFile.good())
 	{
@@ -351,7 +353,10 @@ VOID Image( VOID *v)
 				if( bRead)
 					LoadSingle(addr, 0);
 				else
+				{
 					OnStackWrite(nFunc, disp, addr, bRead);			
+					++ g_nHeads;
+				}
 			}
 			// W:G:6962120
 			else if( 'G' == szLine[2])
@@ -367,6 +372,7 @@ VOID Image( VOID *v)
 				{
 					StoreSingle(addr, nArea);
 					++ nHead;
+					++ g_nHeads;
 					if( nHead >= g_nHead)
 						break;
 				}
@@ -398,24 +404,33 @@ VOID Image( VOID *v)
 	string szFile = KnobOTraceFile.Value() + "_funcs";
 	funcFile.open(szFile.c_str());
 	
+	const int L = KnobLineSize.Value()/4;
+	int nBlocks = (g_GlobalSet.size() + L-1)/L;
 	
 	// _1 for global area trace
 	szFile = KnobOTraceFile.Value() + "_" + ltstr(1);
 	g_oTraceFile.open(szFile.c_str());
-	g_oTraceFile << "1,0,0,0,0" << endl;
+	// # of blocks
+	g_oTraceFile << "nBlocks = " << nBlocks << ";" << endl;
+	// size of traces
+	g_oTraceFile << "nTrace = " << g_GlobalTrace.size() + 2 << ";" << endl;
+	// trace data
+	g_oTraceFile << "traceData = [" << endl;
+	g_oTraceFile << "<0,0,0,0>" << endl;
 	std::list<Element>::iterator e_p = g_GlobalTrace.begin(), e_e = g_GlobalTrace.end();
 	for(; e_p != e_e; ++ e_p)
 	{
-		g_oTraceFile << e_p->_cycle << ",";
+		//g_oTraceFile << e_p->_cycle << ",";
+		g_oTraceFile << "<";
 		g_oTraceFile << e_p->_cycle << ",";
 		g_oTraceFile << e_p->_data << ",";
 		g_oTraceFile << e_p->_func << ",";
-		g_oTraceFile << e_p->_size << endl;
+		g_oTraceFile << e_p->_size << ">" << endl;
 	}
-	g_oTraceFile << g_CurrentCycle << "," << g_CurrentCycle << ",1,0,0" << endl;
+	g_oTraceFile << "<" << g_CurrentCycle << ",1,0,0>" << endl;
+	g_oTraceFile << "];" << endl;
 	g_oTraceFile.close();
-	const int L = KnobLineSize.Value()/4;
-	int nBlocks = (g_GlobalSet.size() + L-1)/L;
+	
 	funcFile << "1\t" << nBlocks << endl;
 	std::string ilp2 = szFile + "_";
 	g_oTraceFile.open(ilp2.c_str() );
@@ -484,10 +499,12 @@ VOID Fini(int code, VOID * v)
 	if(!outf.good())
 		cerr << "Failed to open " << KnobOutputFile.Value().c_str();
 		
+	outf << "The top " << g_nHead << "/" << g_nHeads << " of the trace" << endl;
 	outf << "#Parameters:\n";
 	outf << "L1 read/write latency:\t" << g_rLatL1 << "/" << g_wLatL1 << " cycle" << endl;
 	outf << "Memory read/write latency:\t" << g_memoryLatency << " cycle" << endl;
 	outf << il1->StatsLong("#", CACHE_BASE::CACHE_TYPE_ICACHE);
+	
 	outf << dl1->StatsLong("#", CACHE_BASE::CACHE_TYPE_DCACHE);	
 	CACHE_SET::DumpRefresh(outf);
 	outf.close();

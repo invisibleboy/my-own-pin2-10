@@ -32,5 +32,9 @@ output: the data-map as allocation result
 2.3 SymbolTraceOpti.cpp
 input: ...
 output: ...
+
+3. lifetime2.cpp
+input: the encoded trace
+output: the life time intervals for each write
  
 
